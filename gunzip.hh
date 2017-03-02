@@ -25,15 +25,20 @@
 #include <assert.h>
 
 // Deflate(): This is the public method declared (later) in this file.
-// Use a custom region-copy functor. A window will not be allocated.
 // User-supplied functors:
-//   input() returns the next byte from the input.
-//   output(byte) outputs 1 byte.
-//   outputcopy(length, offset) copies length bytes from head-offset.
+//   input() returns the next byte from the (compressed) input.
+//   output(byte) outputs one uncompressed byte.
+//   outputcopy(length, offset) copies length uncompressed bytes from offset,
+//       Offset is always >= 1.
+//       offset 1 means previous byte,
+//       offset 2 means previous before that and so on.
+//       Note that (offset < length) is not an error and in fact happens frequently.
+//       If length=0, offset indicates the largest look-behind window length that
+//       you need to be prepared for. The length is a power-of-two in range 256..32768.
 //
-// Memory usage: 160 bytes for lengths array
-//               2168 bytes for huffman tree
-//               +miscellaneous automatic variables
+// Memory usage: 160 bytes for lengths array (automatic, i.e. stack)
+//               2160 bytes for huffman tree (automatic, i.e. stack)
+//               +miscellaneous other automatic variables
 template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
 void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy);
 
@@ -143,7 +148,7 @@ struct RandomAccessBitArray
 
 namespace gunzip_ns
 {
-    static constexpr unsigned HuffNodeBits = 27, PoolSize = 642; // 638 for fixed tables
+    static constexpr unsigned HuffNodeBits = 27, PoolSize = 638;
     struct huffnode
     {
         static constexpr unsigned BranchMul = 672; //Any number between PoolSize..682 
@@ -247,7 +252,7 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outpu
     outputcopy(0, winsize);
 
     // Function for reading a huffman-encoded value from bitstream.
-    RandomAccessBitArray<PoolSize*HuffNodeBits> pool; // Total: 642 huffnodes (2168 bytes)
+    RandomAccessBitArray<PoolSize*HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
     hufftree tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
 
     // Read compressed blocks
@@ -274,7 +279,7 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outpu
                 tables_fixed.Create(0, 288, Lengths, 0);   // 575 used here
                 tables_fixed.Create(1, 32,  Lengths, 288); // 63 used here
                 assert(tables_fixed.used == 638 && tables_fixed.used <= PoolSize);
-                // ^pool1 has always 638 elements. If this assertion fails,
+                // ^tables_fixed has always 638 elements. If this assertion fails,
                 // something is wrong. Maybe coincidentally same as (288+32-1)*2.
                 cur_table = &tables_fixed;
             }
@@ -307,8 +312,7 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outpu
             tables_dyn.Create(0, nlen,  Lengths, 0);
             tables_dyn.Create(1, ndist, Lengths, nlen);
             assert(tables_dyn.used <= PoolSize);
-            // ^If this assertion fails, simply increase Pool2size.
-            //  Try e.g. 2048-Pool1size.
+            // ^If this assertion fails, simply increase PoolSize.
             // So far the largest value seen in the wild is 630.
 
             //fprintf(stderr, "pool2 size%5u\n", tables_dyn.used);
