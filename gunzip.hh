@@ -147,7 +147,7 @@ namespace gunzip_ns
     struct huffnode
     {
         static constexpr unsigned BranchMul = 672; //Any number between PoolSize..682 
-        unsigned intval;
+        unsigned intval; // Any integer type at least HuffNodeBits bits wide
         // Branches are in 0..641 range (number of pool indexes). --> 9.33 bits needed
         // Values are in 0..287 range.                            --> 8.17 bits needed
         // Minimum theoretically possible is 26.823 bits.
