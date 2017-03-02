@@ -25,6 +25,18 @@
 #include <assert.h>
 
 // This is the public method declared (later) in this file.
+// Alternative: Use a custom region-copy functor. A window will not be allocated.
+//              output(byte) outputs 1 byte.
+//              outputcopy(length, offset) copies length bytes from head-offset.
+//
+// Memory usage: 160 bytes for lengths array
+//               2168 bytes for huffman tree
+//               +miscellaneous automatic variables
+template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
+void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy);
+
+// Alternative: Same as above, but window-management is handled automatically.
+//              This adds 32770 bytes of automatic variables for the look-behind window.
 template<typename InputFunctor, typename OutputFunctor>
 void Deflate(InputFunctor&& input, OutputFunctor&& output);
 
@@ -32,12 +44,6 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output);
 // In this case, a separate window will not be allocated.
 template<typename InputFunctor>
 void Deflate(InputFunctor&& input, unsigned char* target);
-
-// Alternative: Use a custom region-copy functor. A window will not be allocated.
-//              output(byte) outputs 1 byte.
-//              outputcopy(length, offset) copies length bytes from head-offset.
-template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
-void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy);
 
 // The rest of the file is just for the curious about implementation.
 template<typename U = unsigned long long>
