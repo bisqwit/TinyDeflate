@@ -24,10 +24,12 @@
 */
 #include <assert.h>
 
-// This is the public method declared (later) in this file.
-// Alternative: Use a custom region-copy functor. A window will not be allocated.
-//              output(byte) outputs 1 byte.
-//              outputcopy(length, offset) copies length bytes from head-offset.
+// Deflate(): This is the public method declared (later) in this file.
+// Use a custom region-copy functor. A window will not be allocated.
+// User-supplied functors:
+//   input() returns the next byte from the input.
+//   output(byte) outputs 1 byte.
+//   outputcopy(length, offset) copies length bytes from head-offset.
 //
 // Memory usage: 160 bytes for lengths array
 //               2168 bytes for huffman tree
@@ -46,6 +48,8 @@ template<typename InputFunctor>
 void Deflate(InputFunctor&& input, unsigned char* target);
 
 // The rest of the file is just for the curious about implementation.
+
+// RandomAccessBitArray: An engine for arrays of data items that are smaller than a byte
 template<typename U = unsigned long long>
 struct RandomAccessBitArrayBase
 {
