@@ -7,10 +7,11 @@ that requires minimal amount of memory to work.
 
 * 160 bytes of automatic storage for length tables (320 elements, 4 bits each)
 * 2160 bytes of automatic storage for huffman tree (638 elements, 27 bits each)
-* 68 bytes of temporary automatic storage while a huffman tree is being generated (17 elements, 32 bits each)
+* 51 bytes of temporary automatic storage while a huffman tree is being generated (17 elements, 24 bits each)
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
+* ABI mandated alignment losses
 
-Total: 2320 bytes minimum, 2388+N bytes maximum
+Total: 2320 bytes minimum, 2371+N bytes maximum
 
 In addition, if you neither decompress into memory nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.

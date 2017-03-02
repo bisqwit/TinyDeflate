@@ -187,13 +187,19 @@ namespace gunzip_ns
         // num_values <= 288.
         // Theoretical size limits: count[] : 0-288 (9 bits * 16)                       = 18 bytes
         //                          offs[] : theoretically max. 28310976 (25 bits * 16) = 50 bytes
-        // We now have 17*32 bits = 68 bytes. This is already optimal.
         void Create(unsigned which, unsigned num_values, const RandomAccessBitArray<(288+32)*4>& lengths, unsigned offset)
         {
             if(!which) { used=0; branch0=0; branch1=0; }
-            unsigned data[17] {0}, *offs=data+0, *count=data+1;
-            for(unsigned a = 0; a < num_values; ++a) count[lengths.Get<4>(offset+a)] += 1; // How many times each length appears
-            for(unsigned a = 0; a < 15; a++) offs[a + 1] = (offs[a] + count[a]) * 2u;
+            constexpr unsigned ElemBits = 24, OffsOffset = 0, CountOffset = 1;
+            RandomAccessBitArray<17*ElemBits> data{}; // 51 bytes.
+            auto g = [&data](unsigned n)             { return data.Get<ElemBits>(n); };
+            auto s = [&data](unsigned n, unsigned v) { data.Set<ElemBits,true>(n, v); };
+            for(unsigned a = 0; a < num_values; ++a)
+            {
+                unsigned len = CountOffset + lengths.Get<4>(offset+a);
+                s(len, g(len) + 1); // increase count
+            }
+            for(unsigned a = 0; a < 15; a++) { s(a+1+OffsOffset, (g(a+OffsOffset) + g(a+CountOffset)) * 2u); }
             // Largest values seen in wild for offs[16]: 16777216
             for(unsigned value = 0; value < num_values; ++value)
                 if(unsigned length = lengths.Get<4>(offset+value))
@@ -203,7 +209,8 @@ namespace gunzip_ns
                     if(b) { node = get(b); }
                     else  { if(which) {branch1 = used+1;} else {branch0 = used+1;} put(b = ++used, node = {0}); }
 
-                    for(unsigned q = offs[length]++ << (32u-length); length--; )
+                    unsigned q = g(length+OffsOffset); s(length+OffsOffset, q+1); // q = offset[length]++
+                    for(q <<= (32u-length); length--; )
                     {
                         bool bit = q >> 31; q <<= 1;
                         unsigned nextb = bit ? node.GetBranch1() : node.GetBranch0();
