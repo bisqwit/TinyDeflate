@@ -151,17 +151,22 @@ namespace gunzip_ns
     static constexpr unsigned HuffNodeBits = 27, PoolSize = 638;
     struct huffnode
     {
-        static constexpr unsigned BranchMul = 672; //Any number between PoolSize..682 
         unsigned intval; // Any integer type at least HuffNodeBits bits wide
-        // Branches are in 0..641 range (number of pool indexes). --> 9.33 bits needed
+        // Branches are in 0..637 range (number of pool indexes). --> 9.32 bits needed
         // Values are in 0..287 range.                            --> 8.17 bits needed
-        // Minimum theoretically possible is 26.823 bits.
-        unsigned GetBranch0() const { return intval % BranchMul; }
-        unsigned GetBranch1() const { return (intval / BranchMul) % BranchMul; }
-        unsigned GetValue()   const { return (intval / (BranchMul * BranchMul)); }
-        huffnode SetBranch0(unsigned b) { assert(b < BranchMul); return {intval += (b - GetBranch0())}; }
-        huffnode SetBranch1(unsigned b) { assert(b < BranchMul); return {intval += (b - GetBranch1()) * (BranchMul)}; }
-        huffnode SetValue(unsigned b)   { assert(b < 288);       return {intval += (b - GetValue()) * (BranchMul*BranchMul)}; }
+        // Minimum theoretically possible is 26.805 bits. 27 is pretty good.
+        static constexpr unsigned BranchMul1 = 640, BranchMul2 = 640;
+        // BranchMul1 and BranchMul2  are arbitrary numbers both >= PoolSize
+        // where log2(637 + BranchMul1*(637 + 287*BranchMul2)) < HuffNodeBits.
+        // They are chosen to make fastest assembler code for the functions below.
+        unsigned GetBranch0() const { return intval % BranchMul1; }
+        unsigned GetBranch1() const { return (intval / BranchMul1) % BranchMul2; }
+        unsigned GetValue()   const { return (intval / (BranchMul1 * BranchMul2)); }
+        huffnode SetBranch0(unsigned b) { assert(b < PoolSize); return {intval += (b - GetBranch0())}; }
+        huffnode SetBranch1(unsigned b) { assert(b < PoolSize); return {intval += (b - GetBranch1()) * (BranchMul1)}; }
+        huffnode SetValue(unsigned b)   { assert(b < 288);      return {intval += (b - GetValue()) * (BranchMul1*BranchMul2)}; }
+        static_assert(BranchMul1 >= PoolSize && BranchMul2 >= PoolSize
+            && (PoolSize-1) + BranchMul1*((PoolSize-1) + 287*BranchMul2) < (1u << HuffNodeBits), "Illegal BranchMul values");
     };
     struct hufftree
     {
