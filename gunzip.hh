@@ -149,12 +149,15 @@ struct RandomAccessBitArray
 namespace gunzip_ns
 {
     static constexpr unsigned HuffNodeBits = 27, PoolSize = 638;
+    // Branches are in 0..637 range (number of pool indexes). --> 9.32 bits needed
+    // Values are in 0..287 range.                            --> 8.17 bits needed
+    // Minimum theoretically possible is 26.805 bits. 27 is pretty good.
+    static_assert(PoolSize*PoolSize*288 <= (1 << HuffNodeBits),     "Too few HuffNodeBits");
+    static_assert(PoolSize*PoolSize*288  > (1 << (HuffNodeBits-1)), "Too many HuffNodeBits");
     struct huffnode
     {
         unsigned intval; // Any integer type at least HuffNodeBits bits wide
-        // Branches are in 0..637 range (number of pool indexes). --> 9.32 bits needed
-        // Values are in 0..287 range.                            --> 8.17 bits needed
-        // Minimum theoretically possible is 26.805 bits. 27 is pretty good.
+        static_assert(sizeof(intval)*8 >= HuffNodeBits, "intval is too small");
         static constexpr unsigned BranchMul1 = 640, BranchMul2 = 640;
         // BranchMul1 and BranchMul2  are arbitrary numbers both >= PoolSize
         // where log2(637 + BranchMul1*(637 + 287*BranchMul2)) < HuffNodeBits.
