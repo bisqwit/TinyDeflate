@@ -122,7 +122,7 @@ struct RandomAccessBitArrayBase
     }
 };
 
-template<unsigned Nbits, typename U = unsigned long>
+template<unsigned Nbits, typename U = unsigned long long>
 struct RandomAccessBitArray
 {
     static constexpr unsigned Ubytes = sizeof(U), Ubits = Ubytes*8, Nunits = (Nbits+Ubits-1)/Ubits;
