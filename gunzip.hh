@@ -184,6 +184,10 @@ namespace gunzip_ns
         // Create a huffman tree for num_values, with given lengths.
         // The tree will be put in branch[which]; other branch not touched.
         // Length = how many bits to use for encoding this value.
+        // num_values <= 288.
+        // Theoretical size limits: count[] : 0-288 (9 bits * 16)                       = 18 bytes
+        //                          offs[] : theoretically max. 28310976 (25 bits * 16) = 50 bytes
+        // We now have 17*32 bits = 68 bytes. This is already optimal.
         void Create(unsigned which, unsigned num_values, const RandomAccessBitArray<(288+32)*4>& lengths, unsigned offset)
         {
             if(!which) { used=0; branch0=0; branch1=0; }
@@ -271,8 +275,8 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outpu
         {
         case 0: // copy stored block data
             GetBits(Bits.Count%8); // Go to byte boundary (discard a few bits)
-            {unsigned a = GetBits(16), b = GetBits(16);
-            assert(a == (b^0xFFFF));
+            {unsigned short a = GetBits(16), b = GetBits(16);
+            assert((a^b) == 0xFFFF);
             // Note: It is valid for "a" to be 0 here.
             // It is sometimes used for aligning the stream to byte boundary.
             while(a--) output(GetBits(8)); }
