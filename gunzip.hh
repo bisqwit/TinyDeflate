@@ -25,6 +25,7 @@
 #include <assert.h>
 
 // Deflate(): This is the public method declared (later) in this file.
+// Decompresses (inflates) deflate-compressed data, with a gzip or deflate header.
 // User-supplied functors:
 //   input() returns the next byte from the (compressed) input.
 //   output(byte) outputs one uncompressed byte.
@@ -47,12 +48,20 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outpu
 template<typename InputFunctor, typename OutputFunctor>
 void Deflate(InputFunctor&& input, OutputFunctor&& output);
 
-// Alternative: Deflate to a memory region.
+// Alternative: Deflate-decompress into a memory region.
 // In this case, a separate window will not be allocated.
 template<typename InputFunctor>
 void Deflate(InputFunctor&& input, unsigned char* target);
 
 // The rest of the file is just for the curious about implementation.
+namespace gunzip_ns
+{
+    // If you want more performance at the expense of RAM use,
+    // Turn one or more of these settings to false:
+    static constexpr bool USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION = true; /* 12 bytes save */
+    static constexpr bool USE_BITARRAY_FOR_LENGTHS = true;                   /* 160 bytes save */
+    static constexpr bool USE_BITARRAY_FOR_HUFFNODES = true;                 /* 392 bytes save */
+}
 
 // RandomAccessBitArray: An engine for arrays of data items that are smaller than a byte
 template<typename U = unsigned long long>
@@ -148,17 +157,60 @@ struct RandomAccessBitArray
 
 namespace gunzip_ns
 {
-    static constexpr unsigned HuffNodeBits = 27, PoolSize = 638;
+    template<unsigned bits, int type = (bits>16) ? ((bits>32) ? 8 : 4) : ((bits>8) ? 2 : 1)>
+    struct SmallestType { using result = unsigned long long; };
+    template<unsigned bits> struct SmallestType<bits,1> { using result = unsigned char; };
+    template<unsigned bits> struct SmallestType<bits,2> { using result = unsigned short; };
+    template<unsigned bits> struct SmallestType<bits,4> { using result = unsigned; };
+
+    template<bool packed, unsigned Dimension, unsigned ElementSize>
+    struct RandomAccessArray {};
+
+    template<unsigned Dim, unsigned Elem>
+    struct RandomAccessArray<true, Dim, Elem>
+    {
+        RandomAccessBitArray<Dim*Elem> impl;
+        inline unsigned long long Get(unsigned index) const { return impl.template Get<Elem>(index); }
+        inline void Set(unsigned index, unsigned value) { impl.template Set<Elem,true>(index, value); }
+        inline void QSet(unsigned index, unsigned value) { impl.template Set<Elem,false>(index, value); }
+        template<unsigned Bits>
+        inline void WSet(unsigned index, unsigned long long value) { impl.template Set<Bits,false>(index, value); }
+    };
+
+    template<unsigned Dim, unsigned Elem>
+    struct RandomAccessArray<false, Dim, Elem>
+    {
+        typedef typename SmallestType<Elem>::result E;
+        E data[Dim];
+        inline E Get(unsigned index) const       { return data[index]; }
+        inline void Set(unsigned index, E value) { data[index] = value; }
+        inline void QSet(unsigned index, E value) { data[index] = value; }
+        template<unsigned Bits>
+        inline void WSet(unsigned index, unsigned long long value)
+        {
+            index *= Bits/Elem;
+            for(unsigned b=0; b<Bits; b+=Elem, value>>=Elem)
+                QSet(index++, (value % (1u << Elem)));
+        }
+    };
+}
+
+
+namespace gunzip_ns
+{
+    static constexpr unsigned HuffNodeBits = USE_BITARRAY_FOR_HUFFNODES ? 27 : 32;
+    static constexpr unsigned PoolSize     = 638;
     // Branches are in 0..637 range (number of pool indexes). --> 9.32 bits needed
     // Values are in 0..287 range.                            --> 8.17 bits needed
     // Minimum theoretically possible is 26.805 bits. 27 is pretty good.
-    static_assert(PoolSize*PoolSize*288 <= (1 << HuffNodeBits),     "Too few HuffNodeBits");
-    static_assert(PoolSize*PoolSize*288  > (1 << (HuffNodeBits-1)), "Too many HuffNodeBits");
+    static_assert(!USE_BITARRAY_FOR_HUFFNODES || PoolSize*PoolSize*288 <= (1 << HuffNodeBits),     "Too few HuffNodeBits");
+    static_assert(!USE_BITARRAY_FOR_HUFFNODES || PoolSize*PoolSize*288  > (1 << (HuffNodeBits-1)), "Too many HuffNodeBits");
     struct huffnode
     {
-        unsigned intval; // Any integer type at least HuffNodeBits bits wide
+        SmallestType<HuffNodeBits>::result intval; // Any integer type at least HuffNodeBits bits wide
         static_assert(sizeof(intval)*8 >= HuffNodeBits, "intval is too small");
-        static constexpr unsigned BranchMul1 = 640, BranchMul2 = 640;
+        static constexpr unsigned BranchMul1 = USE_BITARRAY_FOR_HUFFNODES ? 640 : 1024;
+        static constexpr unsigned BranchMul2 = USE_BITARRAY_FOR_HUFFNODES ? 640 : 1024;
         // BranchMul1 and BranchMul2  are arbitrary numbers both >= PoolSize
         // where log2(637 + BranchMul1*(637 + 287*BranchMul2)) < HuffNodeBits.
         // They are chosen to make fastest assembler code for the functions below.
@@ -169,17 +221,17 @@ namespace gunzip_ns
         huffnode SetBranch1(unsigned b) { assert(b < PoolSize); return {intval += (b - GetBranch1()) * (BranchMul1)}; }
         huffnode SetValue(unsigned b)   { assert(b < 288);      return {intval += (b - GetValue()) * (BranchMul1*BranchMul2)}; }
         static_assert(BranchMul1 >= PoolSize && BranchMul2 >= PoolSize
-            && (PoolSize-1) + BranchMul1*((PoolSize-1) + 287*BranchMul2) < (1u << HuffNodeBits), "Illegal BranchMul values");
+            && (PoolSize-1) + BranchMul1*((PoolSize-1) + 287*BranchMul2) < (1ull << HuffNodeBits), "Illegal BranchMul values");
     };
     struct hufftree
     {
-        RandomAccessBitArray<PoolSize*HuffNodeBits>& storage;
+        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,PoolSize,HuffNodeBits>& storage;
         unsigned short used    : 12; // Index of the next unused node in the pool
         unsigned short branch0 : 10;
         unsigned short branch1 : 10;
 
-        huffnode get(unsigned n) const          { return { unsigned(storage.Get<HuffNodeBits>(n-1)) }; }
-        void     put(unsigned n, huffnode node) { storage.Set<HuffNodeBits,true>(n-1, node.intval); }
+        huffnode get(unsigned n) const          { return { unsigned(storage.Get(n-1)) }; }
+        void     put(unsigned n, huffnode node) { storage.Set(n-1, node.intval); }
 
         // Create a huffman tree for num_values, with given lengths.
         // The tree will be put in branch[which]; other branch not touched.
@@ -187,22 +239,24 @@ namespace gunzip_ns
         // num_values <= 288.
         // Theoretical size limits: count[] : 0-288 (9 bits * 16)                       = 18 bytes
         //                          offs[] : theoretically max. 28310976 (25 bits * 16) = 50 bytes
-        void Create(unsigned which, unsigned num_values, const RandomAccessBitArray<(288+32)*4>& lengths, unsigned offset)
+        void Create(unsigned which, unsigned num_values,
+                    const RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4>& lengths, unsigned offset)
         {
             if(!which) { used=0; branch0=0; branch1=0; }
             constexpr unsigned ElemBits = 24, OffsOffset = 0, CountOffset = 1;
-            RandomAccessBitArray<17*ElemBits> data{}; // 51 bytes.
-            auto g = [&data](unsigned n)             { return data.Get<ElemBits>(n); };
-            auto s = [&data](unsigned n, unsigned v) { data.Set<ElemBits,true>(n, v); };
+            RandomAccessArray<USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION, 17, ElemBits> data{}; // 51 bytes.
+            auto g = [&data](unsigned n) -> unsigned { return data.Get(n); };
+            auto s = [&data](unsigned n, unsigned v) { data.Set(n, v); };
+
             for(unsigned a = 0; a < num_values; ++a)
             {
-                unsigned len = CountOffset + lengths.Get<4>(offset+a);
-                s(len, g(len) + 1); // increase count
+                unsigned len = lengths.Get(offset+a); // Note: Can be zero.
+                s(len+CountOffset, g(len+CountOffset) + 1); // increase count
             }
             for(unsigned a = 0; a < 15; a++) { s(a+1+OffsOffset, (g(a+OffsOffset) + g(a+CountOffset)) * 2u); }
             // Largest values seen in wild for offs[16]: 16777216
             for(unsigned value = 0; value < num_values; ++value)
-                if(unsigned length = lengths.Get<4>(offset+value))
+                if(unsigned length = lengths.Get(offset+value))
                 {
                     huffnode node;
                     unsigned b = which ? branch1 : branch0;
@@ -271,11 +325,11 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outpu
     outputcopy(0, winsize);
 
     // Function for reading a huffman-encoded value from bitstream.
-    RandomAccessBitArray<PoolSize*HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
+    RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,PoolSize,HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
     hufftree tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
 
     // Read compressed blocks
-    RandomAccessBitArray<(288+32)*4> Lengths; // Lengths are in 0..15 range. 160 bytes are allocated.
+    RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4> Lengths; // Lengths are in 0..15 range. 160 bytes are allocated.
     for(bool last=false; !last; )
     {
         switch(last=GetBits(1), header=GetBits(2))
@@ -291,10 +345,10 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outpu
         case 1: // fixed block
             if(cur_table != &tables_fixed)
             {
-                for(unsigned n=0; n<9; ++n) Lengths.Set<64,true>((n*16+0)/16,    0x8888888888888888ull);
-                for(unsigned n=0; n<7; ++n) Lengths.Set<64,true>((n*16+0x90)/16, 0x9999999999999999ull);
-                for(unsigned n=0; n<4; ++n) Lengths.Set<32,true>((n*8+0x100)/8,  (7+n/3)*0x11111111u);
-                for(unsigned n=0; n<2; ++n) Lengths.Set<64,true>((n*16+0x120)/16,0x5555555555555555ull);
+                for(unsigned n=0; n<9; ++n) Lengths.WSet<64>((n*16+0)/16,    0x8888888888888888ull);
+                for(unsigned n=0; n<7; ++n) Lengths.WSet<64>((n*16+0x90)/16, 0x9999999999999999ull);
+                for(unsigned n=0; n<4; ++n) Lengths.WSet<32>((n*8+0x100)/8,  (7+n/3)*0x11111111u);
+                for(unsigned n=0; n<2; ++n) Lengths.WSet<64>((n*16+0x120)/16,0x5555555555555555ull);
                 tables_fixed.Create(0, 288, Lengths, 0);   // 575 used here
                 tables_fixed.Create(1, 32,  Lengths, 288); // 63 used here
                 assert(tables_fixed.used == 638 && tables_fixed.used <= PoolSize);
@@ -309,8 +363,8 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outpu
             unsigned ndist = GetBits(5) + 1; // 1..32
             unsigned ncode = GetBits(4) + 4; // 4..19
             assert(nlen+ndist <= 288+32);
-            Lengths.Set<32*4,true>(0,0); // 19 needed, but round to nice unit
-            for(unsigned a=0; a<19 && a<ncode; ++a) Lengths.Set<4>(a<3 ? (a+16) : ((a%2) ? (1-a/2)&7 : (6+a/2)), GetBits(3));
+            Lengths.WSet<32*4>(0, 0); // 19 needed, but round to nice unit
+            for(unsigned a=0; a<19 && a<ncode; ++a) Lengths.QSet(a<3 ? (a+16) : ((a%2) ? (1-a/2)&7 : (6+a/2)), GetBits(3));
             // ^ 19 * 3 = 57 bits are used
             tables_dyn.Create(0, 19, Lengths, 0); // length-lengths
             assert(tables_dyn.used <= PoolSize);
@@ -326,7 +380,7 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outpu
                     default: end = code+1; prev_lencode = lencode; assert(lencode < 16); // 1 times
                 }
                 assert(end <= nlen+ndist);
-                while(code < end) Lengths.Set<4>(code++, lencode);
+                while(code < end) Lengths.QSet(code++, lencode);
             }
             tables_dyn.Create(0, nlen,  Lengths, 0);
             tables_dyn.Create(1, ndist, Lengths, nlen);

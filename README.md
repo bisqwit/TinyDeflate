@@ -16,6 +16,14 @@ Total: 2320 bytes minimum, 2371+N bytes maximum
 In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
 
+### Tuning
+
+If you can afford more RAM, there are three options in gunzip.hh that you can change:
+
+* USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION : Change this to false to use additional 12 bytes of memory for a tiny boost in performance.
+* USE_BITARRAY_FOR_LENGTHS : Change this to false to use additional 160 bytes of memory for a significant boost in performance.
+* USE_BITARRAY_FOR_HUFFNODES : Change this to false to use additional 392 bytes of memory for a significant boost in performance.
+
 ## Unrequirements
 
 * No dynamic memory is allocated under any circumstances, unless your user-supplied functors do it.
