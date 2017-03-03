@@ -41,21 +41,21 @@
 //               2160 bytes for huffman tree (automatic, i.e. stack)
 //               +miscellaneous other automatic variables
 template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
-void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy);
+int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy);
 
 // Alternative: Same as above, but window-management is handled automatically.
 //              This adds 32770 bytes of automatic variables for the look-behind window.
 template<typename InputFunctor, typename OutputFunctor>
-void Deflate(InputFunctor&& input, OutputFunctor&& output);
+int Deflate(InputFunctor&& input, OutputFunctor&& output);
 
 // Alternative: Deflate-decompress into a memory region.
 // In this case, a separate window will not be allocated.
 template<typename InputFunctor>
-void Deflate(InputFunctor&& input, unsigned char* target);
+int Deflate(InputFunctor&& input, unsigned char* target);
 
 // Alternative: Use a pair of forward iterators to denote input range, and an output iterator
 template<typename ForwardIterator, typename OutputIterator>
-void Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output);
+int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output);
 
 // Another iterator alternative.
 /*template<typename InputIterator, typename OutputIterator>
@@ -293,154 +293,220 @@ namespace gunzip_ns
             return node.GetValue();
         }
     };
-}
 
-template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
-void Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy)
-{
-    using namespace gunzip_ns;
-    // Bit-by-bit input routine
-    struct { unsigned long Cache; unsigned Count; } Bits {0,0};
-    auto GetBits = [&Bits,&input](unsigned l)
+    template<bool WithWindow>
+    struct DeflateState
     {
-        for (; Bits.Count < l; Bits.Count += 8)
-            Bits.Cache |= (input() & 0xFFul) << Bits.Count;
-        unsigned w = Bits.Cache & ((1ul << l) - 1);
-        Bits.Cache >>= l;
-        Bits.Count -= l;
-        //fprintf(stderr, "GetBits(%u)->%u\n", l, w);
-        return w;
+        RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4> Lengths; // Lengths are in 0..15 range. 160 bytes are allocated.
+
+        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, PoolSize, HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
+        hufftree tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
+
+        struct { unsigned long Cache; unsigned Count; } Bits {0,0};
     };
 
+    template<>
+    struct DeflateState<true>: public DeflateState<false>
+    {
+        struct { unsigned char Data[32768u]; unsigned short Head=0; } Window;
+    };
+}//ns
+
+template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
+int Deflate(gunzip_ns::DeflateState<false>& state, InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy)
+{
+    using namespace gunzip_ns;
+
+    // Bit-by-bit input routine
+    #define GetBits_F(numbits, param, o) do { \
+        unsigned long l = (numbits); \
+        while(state.Bits.Count < l) \
+        { \
+            unsigned long byte = input(); \
+            state.Bits.Cache |= (byte & 0xFF) << state.Bits.Count; \
+            state.Bits.Count += 8; \
+        } \
+        o(param, state.Bits.Cache & ((1ul << l) - 1)); \
+        state.Bits.Cache >>= l; \
+        state.Bits.Count -= l; \
+    } while(0)
+
+    #define assign(target, value) (target) = (value)
+    #define GetBits(numbits, target) GetBits_F(numbits, target, assign)
+
+    #define ignore(target, value) do {} while(0)
+    #define DummyGetBits(numbits) GetBits_F(numbits, target, ignore)
+
+    #define HuffRead(tree, which, target) do { \
+        huffnode node = (tree).get(which ? (tree).branch1 : (tree).branch0); \
+        while(node.GetBranch1()) \
+        { \
+            unsigned q; GetBits(1, q); \
+            node = (tree).get(q ? node.GetBranch1() : node.GetBranch0()); \
+        } \
+        (target) = node.GetValue(); \
+    } while(0)
+
+    #define Fail_If(condition) do { \
+       assert(!(condition)); \
+       if(condition) return -1; \
+    } while(0)
+
     // Read stream header
-    unsigned short header = GetBits(16), winsize = 32768u;
+    unsigned short header; GetBits(16, header);
     // ^ Read deflate header: method[4] ; winsize[4] ; checksum[8]
     if(header == 0x8B1F) // Is it actually a gzip header?
     {
-        unsigned fmt = GetBits(8), o = GetBits(8); // Get format & flags
-        assert(fmt == 8);
-        GetBits(48); // MTIME (3 of 4); MTIME(1 of 4), XFL and OS
-        if(o&4) // Skip extra fields as indicated by FEXTRA
-            for(unsigned q = GetBits(16); q--; GetBits(8));
-        if(o&8)  while(GetBits(8)) {} // NAME: Skip filename if FNAME was present
-        if(o&16) while(GetBits(8)) {} // COMMENT: Skip comment if FCOMMENT was present
-        if(o&2)  GetBits(16);         // HCRC: Skip FCRC if was present
+        GetBits(8, header); Fail_If(header != 8); // Format identifier should be 8
+        GetBits(8, header);                       // Get flags
+        DummyGetBits(48); // MTIME (3 of 4); MTIME(1 of 4), XFL and OS
+        if(header&4) // Skip extra fields as indicated by FEXTRA
+            { unsigned q; GetBits(16, q); while(q--) { DummyGetBits(8); } }
+        if(header&8)  for(;;) { unsigned q; GetBits(8, q); if(!q) break; } // NAME: Skip filename if FNAME was present
+        if(header&16) for(;;) { unsigned q; GetBits(8, q); if(!q) break; } // COMMENT: Skip comment if FCOMMENT was present
+        if(header&2)  DummyGetBits(16);         // HCRC: Skip FCRC if was present
+        outputcopy(0, 32768u); // GZIP always uses 32k window
     }
     else // No. Deflate header?
     {
-        assert((header & 0x208F) == 0x0008 && !((((header<<8)+(header>>8))&0xFFFF)%31));
-        winsize = 256 << ((header >> 4) & 0xF); // Preset dictionary (0x2000) is not supported
+        Fail_If((header & 0x208F) != 0x0008 || ((((header<<8)+(header>>8))&0xFFFF)%31) != 0);
+        outputcopy(0, 256 << ((header >> 4) & 0xF)); // Preset dictionary (0x2000) is not supported
     }
-    outputcopy(0, winsize);
-
-    // Function for reading a huffman-encoded value from bitstream.
-    RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,PoolSize,HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
-    hufftree tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
 
     // Read compressed blocks
-    RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4> Lengths; // Lengths are in 0..15 range. 160 bytes are allocated.
-    for(bool last=false; !last; )
+    for(header=0; !(header & 1); )
     {
-        switch(last=GetBits(1), header=GetBits(2))
+        GetBits(3, header); Fail_If(header >= 6);
+        switch(header >> 1)
         {
         case 0: // copy stored block data
-            GetBits(Bits.Count%8); // Go to byte boundary (discard a few bits)
-            {unsigned short a = GetBits(16), b = GetBits(16);
-            assert((a^b) == 0xFFFF);
+            DummyGetBits(state.Bits.Count%8); // Go to byte boundary (discard a few bits)
+            {unsigned short a, b; GetBits(16, a); GetBits(16, b);
+            Fail_If((a^b) != 0xFFFF);
             // Note: It is valid for "a" to be 0 here.
             // It is sometimes used for aligning the stream to byte boundary.
-            while(a--) output(GetBits(8)); }
+            while(a--)
+            {
+                GetBits(8, b);
+                output(b);
+            }}
             continue;
         case 1: // fixed block
-            if(cur_table != &tables_fixed)
+            if(state.cur_table != &state.tables_fixed)
             {
-                for(unsigned n=0; n<9; ++n) Lengths.WSet<64>((n*16+0)/16,    0x8888888888888888ull);
-                for(unsigned n=0; n<7; ++n) Lengths.WSet<64>((n*16+0x90)/16, 0x9999999999999999ull);
-                for(unsigned n=0; n<4; ++n) Lengths.WSet<32>((n*8+0x100)/8,  (7+n/3)*0x11111111u);
-                for(unsigned n=0; n<2; ++n) Lengths.WSet<64>((n*16+0x120)/16,0x5555555555555555ull);
-                tables_fixed.Create(0, 288, Lengths, 0);   // 575 used here
-                tables_fixed.Create(1, 32,  Lengths, 288); // 63 used here
-                assert(tables_fixed.used == 638 && tables_fixed.used <= PoolSize);
-                // ^tables_fixed has always 638 elements. If this assertion fails,
+                for(unsigned n=0; n<9; ++n) state.Lengths.template WSet<64>((n*16+0)/16,    0x8888888888888888ull);
+                for(unsigned n=0; n<7; ++n) state.Lengths.template WSet<64>((n*16+0x90)/16, 0x9999999999999999ull);
+                for(unsigned n=0; n<4; ++n) state.Lengths.template WSet<32>((n*8+0x100)/8,  (7+n/3)*0x11111111u);
+                for(unsigned n=0; n<2; ++n) state.Lengths.template WSet<64>((n*16+0x120)/16,0x5555555555555555ull);
+                state.tables_fixed.Create(0, 288, state.Lengths, 0);   // 575 used here
+                state.tables_fixed.Create(1, 32,  state.Lengths, 288); // 63 used here
+                assert(state.tables_fixed.used == 638 && state.tables_fixed.used <= PoolSize);
+                // ^state.tables_fixed has always 638 elements. If this assertion fails,
                 // something is wrong. Maybe coincidentally same as (288+32-1)*2.
-                cur_table = &tables_fixed;
+                state.cur_table = &state.tables_fixed;
             }
             break;
         default: // dynamic block
-            assert(header==2);
-            unsigned nlen = GetBits(5) + 257; // 257..288
-            unsigned ndist = GetBits(5) + 1; // 1..32
-            unsigned ncode = GetBits(4) + 4; // 4..19
+            unsigned nlen, ndist, ncode;
+            GetBits(5, nlen);  nlen += 257; // 257..288
+            GetBits(5, ndist); ndist += 1; // 1..32
+            GetBits(4, ncode); ncode += 4; // 4..19
             assert(nlen+ndist <= 288+32);
-            Lengths.WSet<32*4>(0, 0); // 19 needed, but round to nice unit
-            for(unsigned a=0; a<19 && a<ncode; ++a) Lengths.QSet(a<3 ? (a+16) : ((a%2) ? (1-a/2)&7 : (6+a/2)), GetBits(3));
+            state.Lengths.template WSet<32*4>(0, 0); // 19 needed, but round to nice unit
+            for(unsigned a=0; a<19 && a<ncode; ++a)
+            {
+                unsigned b; GetBits(3, b);
+                state.Lengths.QSet(a<3 ? (a+16) : ((a%2) ? (1-a/2)&7 : (6+a/2)), b);
+            }
             // ^ 19 * 3 = 57 bits are used
-            tables_dyn.Create(0, 19, Lengths, 0); // length-lengths
-            assert(tables_dyn.used <= PoolSize);
-            Lengths = {}; // clear at least (nlen+ndist) nibbles; easiest to clear it all
-            //Lengths.Set<(288+32)*4,true>(0,0);
+            state.tables_dyn.Create(0, 19, state.Lengths, 0); // length-lengths
+            assert(state.tables_dyn.used <= PoolSize);
+            state.Lengths = {}; // clear at least (nlen+ndist) nibbles; easiest to clear it all
+            //state.Lengths.Set<(288+32)*4,true>(0,0);
             for(unsigned end,lencode,prev_lencode=0, code=0; code < nlen+ndist; )
             {
-                switch(lencode = tables_dyn.Read(0, GetBits)) // 0-18
+                HuffRead(state.tables_dyn, 0, lencode); // 0-18
+                switch(lencode)
                 {
-                    case 16: end = code+3+GetBits(2); lencode = prev_lencode; break;     // 3..6
-                    case 17: end = code+3+GetBits(3); lencode = 0; break;                // 3..10
-                    case 18: end = code+11+GetBits(7); lencode = 0; break;               // 11..138
+                    case 16: GetBits(2,end); end += code+3; lencode = prev_lencode; break;     // 3..6
+                    case 17: GetBits(3,end); end += code+3; lencode = 0; break;                // 3..10
+                    case 18: GetBits(7,end); end += code+11; lencode = 0; break;               // 11..138
                     default: end = code+1; prev_lencode = lencode; assert(lencode < 16); // 1 times
                 }
-                assert(end <= nlen+ndist);
-                while(code < end) Lengths.QSet(code++, lencode);
+                Fail_If(end > nlen+ndist);
+                while(code < end) state.Lengths.QSet(code++, lencode);
             }
-            tables_dyn.Create(0, nlen,  Lengths, 0);
-            tables_dyn.Create(1, ndist, Lengths, nlen);
-            assert(tables_dyn.used <= PoolSize);
+            state.tables_dyn.Create(0, nlen,  state.Lengths, 0);
+            state.tables_dyn.Create(1, ndist, state.Lengths, nlen);
+            assert(state.tables_dyn.used <= PoolSize);
             // ^If this assertion fails, simply increase PoolSize.
             // So far the largest value seen in the wild is 630.
 
-            //fprintf(stderr, "pool2 size%5u\n", tables_dyn.used);
-            cur_table = &tables_dyn;
+            //fprintf(stderr, "pool2 size%5u\n", state.tables_dyn.used);
+            state.cur_table = &state.tables_dyn;
         }
         // Do actual deflating.
         for(;;)
         {
-            unsigned code = cur_table->Read(0, GetBits);
-            if(!(code & -256)) output(code); // 0..255: literal byte
+            unsigned code;
+            HuffRead(*state.cur_table, 0, code);
+            if(!(code & -256))
+            {
+                output(code); // 0..255: literal byte
+            }
             else if(!(code & 0xFF)) break; // 256=end
             else // 257..285: length code for backwards reference
             {
-                unsigned a = code-257, lbits = (a >= 8 && a<28) ? (a/4-1) : 0;
-                unsigned length = 3 + GetBits(lbits) + (a > 28 ? 0 : ((a >= 8) ? ((a%4+4) << (a/4-1)) - (a==28) : a));
-                a = cur_table->Read(1, GetBits); // Read distance code (0..31)
+                unsigned a = code-257, lbits = (a >= 8 && a<28) ? (a/4-1) : 0, length, offset;
+                GetBits(lbits,length); length += 3 + (a > 28 ? 0 : ((a >= 8) ? ((a%4+4) << (a/4-1)) - (a==28) : a));
+                HuffRead(*state.cur_table, 1, a); // Read distance code (0..31)
                 unsigned dbits = a>=4 ? a/2-1 : 0, dbase = (a>=4 ? ((2+a%2) << (a/2-1)) : a);
-                outputcopy(length, 1 + dbase + GetBits(dbits));
+                GetBits(dbits, offset); offset += 1 + dbase;
+                outputcopy(length, offset);
             }
         }
     }
     // Note: after this, may come a checksum, and a trailer. Ignoring them.
+    #undef GetBits_F
+    #undef GetBits
+    #undef DummyGetBits
+    #undef assign
+    #undef ignore
+    #undef Fail_If
+    return 0;
+}
+
+template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
+int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy)
+{
+    gunzip_ns::DeflateState<false> state;
+    return Deflate(state, std::forward<InputFunctor>(input), std::forward<OutputFunctor>(output),
+                          std::forward<WindowFunctor>(outputcopy));
 }
 
 template<typename InputFunctor, typename OutputFunctor>
-void Deflate(InputFunctor&& input, OutputFunctor&& output)
+int Deflate(InputFunctor&& input, OutputFunctor&& output)
 {
-    struct { unsigned char Data[32768u]; unsigned short Head; } Window;
+    gunzip_ns::DeflateState<true> state;
     auto Put = [&](unsigned char l)
     {
-        Window.Data[Window.Head++ & 32767u] = l;
+        state.Window.Data[state.Window.Head++ & 32767u] = l;
         output(l);
     };
-    Deflate(std::forward<InputFunctor>(input),
+    return Deflate(state,
+        std::forward<InputFunctor>(input),
         Put,
         [&](unsigned length, unsigned offs)
         {
             // length=0 means that offs is the size of the window.
-            while(length--) { Put(Window.Data[(Window.Head - offs) & 32767u]); }
+            while(length--) { Put(state.Window.Data[(state.Window.Head - offs) & 32767u]); }
         });
 }
 
 template<typename InputFunctor>
-void Deflate(InputFunctor&& input, unsigned char* target)
+int Deflate(InputFunctor&& input, unsigned char* target)
 {
-    Deflate(std::forward<InputFunctor>(input),
+    return Deflate(std::forward<InputFunctor>(input),
         [&](unsigned char l) { *target++ = l; },
         [&](unsigned length, unsigned offs)
         {
@@ -450,15 +516,15 @@ void Deflate(InputFunctor&& input, unsigned char* target)
 }
 
 template<typename ForwardIterator, typename OutputIterator>
-void Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output)
+int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output)
 {
-    Deflate([&]()                { return begin==end ? 0 : *begin++; },
-            [&](unsigned char l) { *output++ = l; });
+    return Deflate([&]()                { return begin==end ? 0 : *begin++; },
+                   [&](unsigned char l) { *output++ = l; });
 }
 
 /*template<typename InputIterator, typename OutputIterator>
-void Deflate(InputIterator&& input, OutputIterator&& output)
+int Deflate(InputIterator&& input, OutputIterator&& output)
 {
-    Deflate([&]()                { return *input++; },
-            [&](unsigned char l) { *output++ = l; });
+    return Deflate([&]()                { return *input++; },
+                   [&](unsigned char l) { *output++ = l; });
 }*/

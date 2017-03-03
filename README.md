@@ -21,6 +21,7 @@ In addition, if you neither decompress into a raw memory area nor supply your ow
 * No dynamic memory is allocated under any circumstances, unless your user-supplied functors do it.
 * The only #include is assert.h, for assert(). No other standard library function, template, or typedef is used.
 * There are no constant arrays or global variables.
+* The header can be used in applications that are compiled without exception or rtti support.
 
 ## Rationale
 
