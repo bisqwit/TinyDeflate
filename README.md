@@ -13,7 +13,7 @@ that requires minimal amount of memory to work.
 
 Total: 2320 bytes minimum, 2371+N bytes maximum
 
-In addition, if you neither decompress into memory nor supply your own window function,
+In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
 
 ## Unrequirements
