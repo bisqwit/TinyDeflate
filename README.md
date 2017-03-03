@@ -16,14 +16,6 @@ Total: 2320 bytes minimum, 2371+N bytes maximum
 In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
 
-### Tuning
-
-If you can afford more RAM, there are three options in gunzip.hh that you can change:
-
-* USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION : Change this to false to use additional 12 bytes of memory for a tiny boost in performance.
-* USE_BITARRAY_FOR_LENGTHS : Change this to false to use additional 160 bytes of memory for a significant boost in performance.
-* USE_BITARRAY_FOR_HUFFNODES : Change this to false to use additional 392 bytes of memory for a significant boost in performance.
-
 ## Unrequirements
 
 * No dynamic memory is allocated under any circumstances, unless your user-supplied functors do it.
@@ -42,3 +34,11 @@ If you can afford more RAM, there are three options in gunzip.hh that you can ch
 * There is no way to prematurely abort decompression, other than by terminating the program (such as with a failing assertion).
 * Slower than your average inflate function. The template uses densely bitpacked arrays, which require plenty of bit-shifting operations for every access.
 * The code obviously performs best on 32-bit or 64-bit platforms. Platforms where 32-bit entities must be synthesized from a number of 8-bit entities are at a disadvantage.
+
+## Tuning
+
+If you can afford more RAM, there are three options in gunzip.hh that you can change:
+
+* USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION : Change this to false to use additional 12 bytes of memory for a tiny boost in performance.
+* USE_BITARRAY_FOR_LENGTHS : Change this to false to use additional 160 bytes of memory for a significant boost in performance.
+* USE_BITARRAY_FOR_HUFFNODES : Change this to false to use additional 392 bytes of memory for a significant boost in performance.
