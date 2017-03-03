@@ -330,11 +330,38 @@ namespace gunzip_ns
 
         RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, PoolSize, HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
         hufftree tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
-        huffnode tmpnode;
 
         unsigned long BitCache = 0;
-        unsigned short nlen_ndist_ncode, header, code, offset;
-        unsigned char BitCount = 0, state = 0, lencode, q;
+        unsigned char BitCount = 0;
+
+        template<typename InputFunctor, bool Abortable>
+        std::pair<unsigned, bool> GetBits(InputFunctor&& input, unsigned numbits)
+        {
+            while(BitCount < numbits)
+            {
+                unsigned long byte = input();
+                if(Abortable && (byte & ~0xFFu)) return {0, true};
+                BitCache |= (byte & 0xFF) << BitCount;
+                BitCount += 8;
+            }
+            unsigned result = BitCache & ((1ul << numbits) - 1);
+            BitCache >>= numbits;
+            BitCount -= numbits;
+            return {result, false};
+        }
+
+        template<typename InputFunctor, bool Abortable>
+        std::pair<unsigned,bool> HuffReadT(InputFunctor&& input, hufftree& tree, unsigned which)
+        {
+            huffnode tmpnode = tree.get(which ? tree.branch1 : tree.branch0);
+            while(tmpnode.GetBranch1())
+            {
+                auto p = GetBits<InputFunctor,Abortable>(std::forward<InputFunctor>(input), 1);
+                if(p.second) return p;
+                tmpnode = tree.get(p.first ? tmpnode.GetBranch1() : tmpnode.GetBranch0());
+            }
+            return {tmpnode.GetValue(), false};
+        }
     };
 
     template<>
@@ -407,19 +434,10 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
     // in order to make them inlined in the function structure, and breakable/resumable.
 
     // Bit-by-bit input routine
-    #define GetBits_F(numbits, param, o) \
-        while(state.BitCount < numbits) \
-        { \
-            case __LINE__&0xFF: ; \
-            unsigned long byte = input(); \
-            if((Abortable&1) && (byte & ~0xFF)) { if(Abortable&4) { state.state=__LINE__&0xFF; } return 1; } \
-            \
-            state.BitCache |= (byte & 0xFF) << state.BitCount; \
-            state.BitCount += 8; \
-        } \
-        o(param, state.BitCache & ((1ul << numbits) - 1)); \
-        state.BitCache >>= numbits; \
-        state.BitCount -= numbits
+    #define GetBits_F(numbits, param, o) do { \
+        auto p = state.template GetBits<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), numbits); \
+        if(p.second) return 1; \
+        o(param, p.first); } while(0)
 
     #define assign(target, value) target = (value)
     #define GetBits(numbits, target) GetBits_F(numbits, target, assign)
@@ -428,71 +446,62 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
     #define DummyGetBits(numbits) GetBits_F(numbits, target, ignore)
 
     // Huffman tree read routine.
-    #define HuffRead(tree, which, target) \
-        state.tmpnode = (tree).get(which ? (tree).branch1 : (tree).branch0); \
-        while(state.tmpnode.GetBranch1()) \
-        { \
-            GetBits(1, bool q); \
-            state.tmpnode = (tree).get(q ? state.tmpnode.GetBranch1() : state.tmpnode.GetBranch0()); \
-        } \
-        target = state.tmpnode.GetValue()
+    #define HuffRead(tree, which, target) do { \
+        auto p = state.HuffReadT<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), tree, which); \
+        if(p.second) return 1; \
+        target = p.first; } while(0)
 
     #define Fail_If(condition) do { \
         /*assert(!(condition));*/ \
         if(condition) return -1; \
     } while(0)
 
-    switch((Abortable&4) ? state.state : 0u) { case 0u:;
-
     // Read stream header
-    GetBits(16, state.header);
+    unsigned short header;
+    GetBits(16, header);
     // ^ Read deflate header: method[4] ; winsize[4] ; checksum[8]
-    if(state.header == 0x8B1F) // Is it actually a gzip header?
+    if(header == 0x8B1F) // Is it actually a gzip header?
     {
-        GetBits(8, state.header); Fail_If(state.header != 8); // Format identifier should be 8
-        GetBits(8, state.header);                       // Get flags
+        GetBits(8, header); Fail_If(header != 8); // Format identifier should be 8
+        GetBits(8, header);                       // Get flags
         DummyGetBits(48); // MTIME (3 of 4); MTIME(1 of 4), XFL and OS
-        if(state.header&4) // Skip extra fields as indicated by FEXTRA
-            { GetBits(16, state.code);
-               while(state.code--) { DummyGetBits(8); } }
-        if(state.header&8)  for(;;) { GetBits(8, bool q); if(!q) break; } // NAME: Skip filename if FNAME was present
-        if(state.header&16) for(;;) { GetBits(8, bool q); if(!q) break; } // COMMENT: Skip comment if FCOMMENT was present
-        if(state.header&2)  { DummyGetBits(16); }      // HCRC: Skip FCRC if was present
+        if(header&4) // Skip extra fields as indicated by FEXTRA
+            { unsigned q; GetBits(16, q);
+              while(q--) { DummyGetBits(8); } }
+        if(header&8)  for(;;) { bool q; GetBits(8, q); if(!q) break; } // NAME: Skip filename if FNAME was present
+        if(header&16) for(;;) { bool q; GetBits(8, q); if(!q) break; } // COMMENT: Skip comment if FCOMMENT was present
+        if(header&2)  { DummyGetBits(16); }      // HCRC: Skip FCRC if was present
         outputcopy(0, 32768u); // GZIP always uses 32k window
     }
     else // No. Deflate header?
     {
-        Fail_If((state.header & 0x208F) != 0x0008 || ((((state.header<<8)+(state.header>>8))&0xFFFF)%31) != 0);
-        outputcopy(0, 256 << ((state.header >> 4) & 0xF)); // Preset dictionary (0x2000) is not supported
+        Fail_If((header & 0x208F) != 0x0008 || ((((header<<8)+(header>>8))&0xFFFF)%31) != 0);
+        outputcopy(0, 256 << ((header >> 4) & 0xF)); // Preset dictionary (0x2000) is not supported
     }
 
     // Read compressed blocks
-    for(state.header=0; !(state.header & 1); )
+    for(header=0; !(header & 1); )
     {
-        GetBits(3, state.header);
-        if(!(state.header & 4)) // Fixed block
+        GetBits(3, header);
+        if(!(header & 4)) // Fixed block
         {
-            if(state.header < 2) // Copy stored block data
+            if(header < 2) // Copy stored block data
             {
-                #define a state.code
-                a = state.BitCount%8;
+                unsigned short a = state.BitCount%8;
                 DummyGetBits(a); // Go to byte boundary (discard a few bits)
                 GetBits(16, a);
-                {GetBits(16, unsigned short b);
-                Fail_If((a^b) != 0xFFFF);}
+                { unsigned short b; GetBits(16, b); Fail_If((a^b) != 0xFFFF); }
                 // Note: It is valid for "a" to be 0 here.
                 // It is sometimes used for aligning the stream to byte boundary.
                 while(a--)
                 {
-                    #define octet state.lencode
+                    unsigned char octet;
                     GetBits(8, octet);
                     while(OutputHelper<Abortable&2>::output(output, octet))
                     {
-                        if(Abortable&4) { state.state = __LINE__&0xFF; } return 2; case __LINE__&0xFF: ;
+                        return 2;
                     }
-                    #undef octet
                 }
-                #undef a
                 continue;
             }
             if(state.cur_table != &state.tables_fixed)
@@ -511,19 +520,18 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
         }
         else // Dynamic block
         {
-            Fail_If(state.header & 2);
-
-            GetBits(14, state.nlen_ndist_ncode);
-            #define nlen  (((state.nlen_ndist_ncode >> 0u) & 0x1Fu) + 257u) // 257..288
-            #define ndist (((state.nlen_ndist_ncode >> 5u) & 0x1Fu) + 1u)   // 1..32
-            #define ncode ( (state.nlen_ndist_ncode >>10u)          + 4u)   // 4..19
+            Fail_If(header & 2);
+            unsigned short nlen_ndist_ncode;
+            GetBits(14, nlen_ndist_ncode);
+            #define nlen  (((nlen_ndist_ncode >> 0u) & 0x1Fu) + 257u) // 257..288
+            #define ndist (((nlen_ndist_ncode >> 5u) & 0x1Fu) + 1u)   // 1..32
+            #define ncode ( (nlen_ndist_ncode >>10u)          + 4u)   // 4..19
             assert(nlen+ndist <= 288+32);
 
             state.Lengths.template WSet<32*4>(0, 0); // 19 needed, but round to nice unit
-            for(state.code=0; state.code < ncode; ++state.code)
+            for(unsigned a=0; a < ncode; ++a)
             {
-                GetBits(3, unsigned b);
-                unsigned a = state.code;
+                unsigned b; GetBits(3, b);
                 state.Lengths.QSet(a<3 ? (a+16) : ((a%2) ? (1-a/2)&7 : (6+a/2)), b);
             }
             // ^ 19 * 3 = 57 bits are used
@@ -531,21 +539,24 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             assert(state.tables_dyn.used <= PoolSize);
             state.Lengths = {}; // clear at least (nlen+ndist) nibbles; easiest to clear it all
             //state.Lengths.Set<(288+32)*4,true>(0,0);
-            for(state.code = state.lencode = 0; state.code < nlen+ndist; )
+            unsigned short code = 0;
+            unsigned char lencode = 0;
+            while(code < nlen+ndist)
             {
-                HuffRead(state.tables_dyn, 0, state.q); // 0-18
-                assert(state.q < 19);
+                unsigned char q;
+                HuffRead(state.tables_dyn, 0, q); // 0-18
+                assert(q < 19);
 
-                if(!(state.q & 16))    { state.lencode = state.q * 0x11u; state.q = 1; } // 1 times (q < 16) (use q, set prev)
-                else if(state.q < 17)  { GetBits(2, state.q); state.q += 3;  state.lencode = (state.lencode >> 4) * 0x11u; } // 3..6 (use prev)
-                else if(state.q == 17) { GetBits(3, state.q); state.q += 3;  state.lencode &= 0xF0; }                        // 3..10   (use 0)
-                else                   { GetBits(7, state.q); state.q += 11; state.lencode &= 0xF0; }                        // 11..138 (use 0)
-                assert(state.q > 0);
+                if(!(q & 16))    { lencode = q * 0x11u; q = 1; } // 1 times (q < 16) (use q, set prev)
+                else if(q < 17)  { GetBits(2, q); q += 3;  lencode = (lencode >> 4) * 0x11u; } // 3..6 (use prev)
+                else if(q == 17) { GetBits(3, q); q += 3;  lencode &= 0xF0; }                        // 3..10   (use 0)
+                else             { GetBits(7, q); q += 11; lencode &= 0xF0; }                        // 11..138 (use 0)
+                assert(q > 0);
 
-                unsigned c = state.code, e = c + state.q, l = state.lencode & 0xF;
+                unsigned c = code, e = c + q, l = lencode & 0xF;
                 Fail_If(e > (nlen+ndist));
                 while(c < e) { state.Lengths.QSet(c++, l); }
-                state.code = e;
+                code = e;
             }
             state.tables_dyn.Create(0, nlen,  state.Lengths, 0);
             state.tables_dyn.Create(1, ndist, state.Lengths, nlen);
@@ -562,37 +573,31 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
         // Do actual deflating.
         for(;;)
         {
-            HuffRead(*state.cur_table, 0, state.code);
-            if(!(state.code & -256)) // 0..255: literal byte
+            unsigned short code;
+            HuffRead(*state.cur_table, 0, code);
+            if(!(code & -256)) // 0..255: literal byte
             {
-                while(OutputHelper<Abortable&2>::output(output, state.code))
+                while(OutputHelper<Abortable&2>::output(output, code))
                 {
-                    if(Abortable&4) { state.state = __LINE__&0xFF; } return 2; case __LINE__&0xFF: ;
+                    return 2;
                 }
             }
-            else if(!(state.code & 0xFF)) break; // 256=end
+            else if(!(code & 0xFF)) break; // 256=end
             else // 257..285: length code for backwards reference
             {
-                #define a      (unsigned(state.code-257))
-                #define length state.nlen_ndist_ncode
+                unsigned short a = code-257, length;
                 GetBits(unsigned((a >= 8 && a<28) ? (a/4-1) : 0), length);
                 length += 3 + (a > 28 ? 0 : ((a >= 8) ? ((a%4+4) << (a/4-1)) - (a==28) : a));
-                #undef a
 
-                #define a state.code
                 HuffRead(*state.cur_table, 1, a); // Read distance code (0..31)
 
-                #define dbits   unsigned(a>=4 ? a/2-1 : 0)
-                #define offset  state.offset
+                unsigned dbits = unsigned(a>=4 ? a/2-1 : 0);
+                unsigned offset;
                 GetBits(dbits, offset); offset += (1 + (a>=4 ? ((2+a%2) << (a/2-1)) : a));
                 while(OutputHelper<Abortable&2>::outputcopy(outputcopy, length, offset))
                 {
-                    if(Abortable&4) { state.state = __LINE__&0xFF; } return 3; case __LINE__&0xFF: ;
+                    return 3;
                 }
-                #undef dbits
-                #undef a
-                #undef length
-                #undef offset
             }
         }
     }
@@ -603,7 +608,6 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
     #undef assign
     #undef ignore
     #undef Fail_If
-    } //switch
     return 0;
 }
 
@@ -620,7 +624,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindo
 {
     gunzip_ns::DeflateState<false> state;
 
-    constexpr bool OutputAbortable = std::is_convertible<typename std::result_of<OutputFunctor(int)>::type, bool>::value
+    constexpr bool OutputAbortable = std::is_same<typename std::result_of<OutputFunctor(int)>::type, bool>::value
                                   && std::is_convertible<typename std::result_of<WindowFunctor(int,int)>::type, int>::value;
     constexpr bool InputAbortable  = !(std::is_same<typename std::result_of<InputFunctor()>, unsigned char>::value
                                     || std::is_same<typename std::result_of<InputFunctor()>,   signed char>::value
@@ -638,7 +642,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor, int>::type
 {
     gunzip_ns::DeflateState<true> state;
 
-    constexpr bool OutputAbortable = std::is_convertible<typename std::result_of<OutputFunctor(int)>::type, bool>::value;
+    constexpr bool OutputAbortable = std::is_same<typename std::result_of<OutputFunctor(int)>::type, bool>::value;
     constexpr bool InputAbortable  = !(std::is_same<typename std::result_of<InputFunctor()>, unsigned char>::value
                                     || std::is_same<typename std::result_of<InputFunctor()>,   signed char>::value
                                     || std::is_same<typename std::result_of<InputFunctor()>,          char>::value);
