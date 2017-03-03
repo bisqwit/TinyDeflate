@@ -31,10 +31,14 @@ In addition, if you neither decompress into a raw memory area nor supply your ow
 ## Caveats
 
 * Decompressor only. Deflate and GZIP streams are supported.
-* Data is assumed to be valid. In case of invalid data, either an assert() will fail, or the program will write out of memory bounds.
-* There is no way to prematurely abort decompression, other than by terminating the program (such as with a failing assertion).
 * Slower than your average inflate function. The template uses densely bitpacked arrays, which require plenty of bit-shifting operations for every access.
 * The code obviously performs best on 32-bit or 64-bit platforms. Platforms where 32-bit entities must be synthesized from a number of 8-bit entities are at a disadvantage.
+
+There are prototypes for which these conditions hold:
+* Data is assumed to be valid. In case of invalid data, either an assert() will fail, or the program will write out of memory bounds.
+* There is no way to prematurely abort decompression, other than by terminating the program (such as with a failing assertion).
+
+And there are prototypes that are safe.
 
 ## Tuning
 
@@ -61,15 +65,36 @@ Decompress an array containing gzipped data into another array that must be larg
 
     extern const char compressed_data[];
     extern unsigned char outbuffer[131072];
-
+    
     unsigned inpos = 0;
     Deflate([&]() { return compressed_data[inpos++]; },
             outbuffer);
 
+Same as above, but with range checking:
+
+    extern const char compressed_data[];
+    extern unsigned char outbuffer[131072];
+    
+    unsigned inpos = 0;
+    int result = Deflate([&]() { return compressed_data[inpos++]; },
+            outbuffer,
+            sizeof(outbuffer));
+    if(result != 0) std::fprintf(stderr, "Error\n");
+
+Same as above, but with more range checking:
+
+    extern const char compressed_data[];
+    extern unsigned compressed_data_length;
+    extern unsigned char outbuffer[131072];
+    
+    int result = Deflate(compressed_data, compressed_data + compressed_data_length,
+                         outbuffer, outbuffer + sizeof(outbuffer));
+    if(result != 0) std::fprintf(stderr, "Error\n");
+
 Decompress using a custom window function (the separate 32 kB window buffer will not be allocated):
 
     std::vector<unsigned char> result;
-
+    
     Deflate(std::getchar,
             [&](unsigned byte)
             {
