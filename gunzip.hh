@@ -245,15 +245,15 @@ namespace gunzip_ns
             if(!which) { used=0; branch0=0; branch1=0; }
             constexpr unsigned ElemBits = 24, OffsOffset = 0, CountOffset = 1;
             RandomAccessArray<USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION, 17, ElemBits> data{}; // 51 bytes.
-            auto g = [&data](unsigned n) -> unsigned { return data.Get(n); };
-            auto s = [&data](unsigned n, unsigned v) { data.Set(n, v); };
 
             for(unsigned a = 0; a < num_values; ++a)
             {
                 unsigned len = lengths.Get(offset+a); // Note: Can be zero.
-                s(len+CountOffset, g(len+CountOffset) + 1); // increase count
+                data.Set(len+CountOffset, data.Get(len+CountOffset) + 1); // increase count
             }
-            for(unsigned a = 0; a < 15; a++) { s(a+1+OffsOffset, (g(a+OffsOffset) + g(a+CountOffset)) * 2u); }
+            for(unsigned a = 0; a < 15; a++)
+                data.Set(a+1+OffsOffset,
+                         2u * (data.Get(a+OffsOffset) + data.Get(a+CountOffset)));
             // Largest values seen in wild for offs[16]: 16777216
             for(unsigned value = 0; value < num_values; ++value)
                 if(unsigned length = lengths.Get(offset+value))
@@ -263,7 +263,8 @@ namespace gunzip_ns
                     if(b) { node = get(b); }
                     else  { if(which) {branch1 = used+1;} else {branch0 = used+1;} put(b = ++used, node = {0}); }
 
-                    unsigned q = g(length+OffsOffset); s(length+OffsOffset, q+1); // q = offset[length]++
+                    unsigned q = data.Get(length+OffsOffset); data.Set(length+OffsOffset, q+1); // q = offset[length]++
+                    assert(length > 0);
                     for(q <<= (32u-length); length--; )
                     {
                         bool bit = q >> 31; q <<= 1;
