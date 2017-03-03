@@ -40,5 +40,50 @@ In addition, if you neither decompress into a raw memory area nor supply your ow
 If you can afford more RAM, there are three options in gunzip.hh that you can change:
 
 * USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION : Change this to false to use additional 12 bytes of memory for a tiny boost in performance.
-* USE_BITARRAY_FOR_LENGTHS : Change this to false to use additional 160 bytes of memory for a significant boost in performance.
+* USE_BITARRAY_FOR_LENGTHS : Change this to false to use additional 160 bytes of memory for a noticeable boost in performance.
 * USE_BITARRAY_FOR_HUFFNODES : Change this to false to use additional 392 bytes of memory for a significant boost in performance.
+
+All three settings at 'false' will consume 2940 bytes of automatic memory + alignment losses + callframes + spills.
+
+## Example use:
+
+Decompress the standard input into the standard output (uses 32 kB automatically allocated window):
+
+    Deflate([]()                   { return std::getchar(); },
+            [](unsigned char byte) { std::putchar(byte); });
+    
+    // Or more simply:
+    
+    Deflate(std::getchar, std::putchar);
+
+Decompress an array containing gzipped data into another array that must be large enough to hold the result. A window buffer will not be allocated.
+
+    extern const char compressed_data[];
+    extern unsigned char outbuffer[131072];
+
+    unsigned inpos = 0;
+    Deflate([&]() { return compressed_data[inpos++]; },
+            outbuffer);
+
+Decompress using a custom window function (the separate 32 kB window buffer will not be allocated):
+
+    std::vector<unsigned char> result;
+
+    Deflate(std::getchar,
+            [&](unsigned byte)
+            {
+                result.push_back(byte);
+            },
+            [&](unsigned length, unsigned offset)
+            {
+                 if(!length)
+                 {
+                     // offset contains the maximum look-behind distance.
+                     // You could use this information to allocate a buffer of a particular size.
+                     // length=0 case is invoked exactly once before any length!=0 cases are.
+                 }
+                 while(length-- > 0)
+                 {
+                     result.push_back( result[result.size()-offset] );
+                 }
+            });
