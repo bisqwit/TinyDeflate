@@ -53,6 +53,14 @@ void Deflate(InputFunctor&& input, OutputFunctor&& output);
 template<typename InputFunctor>
 void Deflate(InputFunctor&& input, unsigned char* target);
 
+// Alternative: Use a pair of forward iterators to denote input range, and an output iterator
+template<typename ForwardIterator, typename OutputIterator>
+void Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output);
+
+// Another iterator alternative.
+/*template<typename InputIterator, typename OutputIterator>
+void Deflate(InputIterator&& input, OutputIterator&& output);*/
+
 // The rest of the file is just for the curious about implementation.
 namespace gunzip_ns
 {
@@ -440,3 +448,17 @@ void Deflate(InputFunctor&& input, unsigned char* target)
             for(; length--; ++target) { *target = *(target-offs); }
         });
 }
+
+template<typename ForwardIterator, typename OutputIterator>
+void Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output)
+{
+    Deflate([&]()                { return begin==end ? 0 : *begin++; },
+            [&](unsigned char l) { *output++ = l; });
+}
+
+/*template<typename InputIterator, typename OutputIterator>
+void Deflate(InputIterator&& input, OutputIterator&& output)
+{
+    Deflate([&]()                { return *input++; },
+            [&](unsigned char l) { *output++ = l; });
+}*/
