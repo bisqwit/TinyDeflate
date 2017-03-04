@@ -808,6 +808,16 @@ typename std::enable_if<DeflIsForwardIterator && DeflIsRandomAccessIterator, int
             if(target_begin == target_end) return true;
             *target_begin++ = l;
             return false;
+        },
+        [&](std::uint_least16_t length, std::uint_fast16_t offs)
+        {
+            // length=0 means that offs is the size of the window.
+            for(; length > 0; --length, ++target_begin)
+            {
+                if(target_begin == target_end) break;
+                *target_begin = *(target_begin - offs);
+            }
+            return length;
         });
 }
 

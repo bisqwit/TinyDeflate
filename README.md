@@ -16,6 +16,16 @@ Total: 2320 bytes minimum, 2371+N bytes maximum
 In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
 
+## Tuning
+
+If you can afford more RAM, there are three options in gunzip.hh that you can change:
+
+* USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION : Change this to false to use additional 12 bytes of memory for a tiny boost in performance.
+* USE_BITARRAY_FOR_LENGTHS : Change this to false to use additional 160 bytes of memory for a noticeable boost in performance.
+* USE_BITARRAY_FOR_HUFFNODES : Change this to false to use additional 392 bytes of memory for a significant boost in performance.
+
+All three settings at 'false' will consume 2940 bytes of automatic memory + alignment losses + callframes + spills.
+
 ## Unrequirements
 
 * No dynamic memory is allocated under any circumstances, unless your user-supplied functors do it.
@@ -41,38 +51,86 @@ There are prototypes for which these conditions hold:
 
 And there are prototypes that are safe.
 
-## Tuning
+## Definitions
 
-If you can afford more RAM, there are three options in gunzip.hh that you can change:
+```C++
+template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
+int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy); // (1) (2) (3)
 
-* USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION : Change this to false to use additional 12 bytes of memory for a tiny boost in performance.
-* USE_BITARRAY_FOR_LENGTHS : Change this to false to use additional 160 bytes of memory for a noticeable boost in performance.
-* USE_BITARRAY_FOR_HUFFNODES : Change this to false to use additional 392 bytes of memory for a significant boost in performance.
+template<typename InputFunctor, typename OutputFunctor>
+int Deflate(InputFunctor&& input, OutputFunctor&& output); // (1) (2) (7)
 
-All three settings at 'false' will consume 2940 bytes of automatic memory + alignment losses + callframes + spills.
+template<typename InputFunctor, typename RandomAccessIterator>
+int Deflate(InputFunctor&& input, RandomAccessIterator&& target); // (1) (7) (8)
+
+template<typename InputFunctor, typename RandomAccessIterator>
+int Deflate(InputFunctor&& input, RandomAccessIterator&& target, std::size_t target_limit); // (1) (4) (8)
+
+template<typename InputFunctor, typename RandomAccessIterator>
+int Deflate(InputFunctor&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (1) (5) (8)
+
+template<typename ForwardIterator, typename OutputIterator>
+int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output); // (6) (7)
+
+template<typename ForwardIterator, typename OutputFunctor>
+int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output); // (2) (6) (7)
+
+template<typename ForwardIterator, typename OutputFunctor, typename WindowFunctor>
+int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output, WindowFunctor&& outputcopy); // (2) (3) (6)
+
+template<typename InputIterator, typename OutputIterator>
+void Deflate(InputIterator&& input, OutputIterator&& output); // (7) (9)
+
+template<typename ForwardIterator, typename RandomAccessIterator>
+int Deflate(ForwardIterator&& begin, ForwardIterator&& end, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (5) (6) (8)
+```
+
+1) If the input functor (`input`) returns an integer type other than a `char`, `signed char`, or `unsigned char`,
+and the returned value is smaller than 0 or larger than 255, the decompression aborts with return value 1.
+
+2) If the output functor (`output`) returns a `bool`, and the returned value is `true`, the decompression aborts with return value 2.
+
+3) If the window function returns an integer type, and the returned value is other than 0, the decompression aborts with return value 3.
+
+4) If `target_limit` bytes have been written into `target` and the decompression is not yet complete, the decompression aborts with return value 2.
+
+5) If `target_begin == target_end`, the decompression aborts with return value 2.
+
+6) If `begin == end`, the decompression aborts with return value 1.
+
+7) A separate 32768-byte sliding window will be automatically and separately allocated for the decompression.
+
+8) The output data buffer is assumed to persist during the call and doubles as the sliding window for the decompression.
+
+9) If the input iterator deferences into a value outside the 0 — 255 range, the decompression aborts with return value 1.
 
 ## Example use:
 
 Decompress the standard input into the standard output (uses 32 kB automatically allocated window):
 
+```C++
     Deflate([]()                   { return std::getchar(); },
             [](unsigned char byte) { std::putchar(byte); });
     
     // Or more simply:
     
     Deflate(std::getchar, std::putchar);
+```
 
 Decompress an array containing gzipped data into another array that must be large enough to hold the result. A window buffer will not be allocated.
 
+```C++
     extern const char compressed_data[];
     extern unsigned char outbuffer[131072];
     
     unsigned inpos = 0;
     Deflate([&]() { return compressed_data[inpos++]; },
             outbuffer);
+```
 
 Same as above, but with range checking:
 
+```C++
     extern const char compressed_data[];
     extern unsigned char outbuffer[131072];
     
@@ -81,9 +139,11 @@ Same as above, but with range checking:
             outbuffer,
             sizeof(outbuffer));
     if(result != 0) std::fprintf(stderr, "Error\n");
+```
 
 Same as above, but with more range checking:
 
+```C++
     extern const char compressed_data[];
     extern unsigned compressed_data_length;
     extern unsigned char outbuffer[131072];
@@ -91,9 +151,11 @@ Same as above, but with more range checking:
     int result = Deflate(compressed_data, compressed_data + compressed_data_length,
                          outbuffer, outbuffer + sizeof(outbuffer));
     if(result != 0) std::fprintf(stderr, "Error\n");
+```
 
 Decompress using a custom window function (the separate 32 kB window buffer will not be allocated):
 
+```C++
     std::vector<unsigned char> result;
     
     Deflate(std::getchar,
@@ -114,3 +176,4 @@ Decompress using a custom window function (the separate 32 kB window buffer will
                      result.push_back( result[result.size()-offset] );
                  }
             });
+```
