@@ -153,6 +153,13 @@ If either the window function returns `void`, or the output functor does not ret
 
 10) If `length` bytes have been read from `begin` and the decompression is not yet complete, the decompression aborts with return value 1.
 
+Note that some of these definitions may be ambiguous.
+If you hit a compiler error trying e.g. to instantiate
+a call with three iterator parameters,
+choose a different call method.
+
+## Requirements
+
 ```C++
 // An InputFunctor has the following prototype,
 // wherein type1 is convertible into unsigned char:
