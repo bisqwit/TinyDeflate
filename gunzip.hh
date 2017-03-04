@@ -205,9 +205,9 @@ struct RandomAccessBitArray
 namespace gunzip_ns
 {
     template<unsigned bits>
-    using SmallestType = typename std::conditional< (bits>16),
-                         typename std::conditional< (bits>32), std::uint_least64_t, std::uint_least32_t>::type,
-                         typename std::conditional< (bits> 8), std::uint_least16_t, std::uint_least8_t >::type>::type;
+    using SmallestType = typename std::conditional< (bits<=16),
+                         typename std::conditional< (bits<= 8), std::uint_least8_t,  std::uint_least16_t>::type,
+                         typename std::conditional< (bits<=32), std::uint_least32_t, std::uint_least64_t>::type>::type;
 
     template<bool packed, unsigned Dimension, unsigned ElementSize>
     struct RandomAccessArray {};
@@ -251,6 +251,7 @@ namespace gunzip_ns
     // Minimum theoretically possible is 26.805 bits. 27 is pretty good.
     static_assert(!USE_BITARRAY_FOR_HUFFNODES || PoolSize*PoolSize*288 <= (1 << HuffNodeBits),     "Too few HuffNodeBits");
     static_assert(!USE_BITARRAY_FOR_HUFFNODES || PoolSize*PoolSize*288  > (1 << (HuffNodeBits-1)), "Too many HuffNodeBits");
+    template<unsigned HuffNodeBits>
     struct huffnode
     {
         SmallestType<HuffNodeBits> intval; // Any integer type at least HuffNodeBits bits wide
@@ -269,15 +270,17 @@ namespace gunzip_ns
         static_assert(BranchMul1 >= PoolSize && BranchMul2 >= PoolSize
             && (PoolSize-1) + BranchMul1*((PoolSize-1) + 287*BranchMul2) < (std::uint64_t(1) << HuffNodeBits), "Illegal BranchMul values");
     };
+    template<unsigned HuffNodeBits>
     struct hufftree
     {
+        using nodetype = huffnode<HuffNodeBits>;
         RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,PoolSize,HuffNodeBits>& storage;
         std::uint_least16_t used    : 12; // Index of the next unused node in the pool
         std::uint_least16_t branch0 : 10;
         std::uint_least16_t branch1 : 10;
 
-        huffnode get(std::uint_fast16_t n) const          { return { SmallestType<HuffNodeBits>(storage.Get(n-1)) }; }
-        void     put(std::uint_fast16_t n, huffnode node) { storage.Set(n-1, node.intval); }
+        nodetype get(std::uint_fast16_t n) const          { return { SmallestType<HuffNodeBits>(storage.Get(n-1)) }; }
+        void     put(std::uint_fast16_t n, nodetype node) { storage.Set(n-1, node.intval); }
 
         // Create a huffman tree for num_values, with given lengths.
         // The tree will be put in branch[which]; other branch not touched.
@@ -304,7 +307,7 @@ namespace gunzip_ns
             for(unsigned value = 0; value < num_values; ++value)
                 if(std::uint_fast8_t length = lengths.Get(offset+value))
                 {
-                    huffnode node;
+                    nodetype node;
                     std::uint_fast16_t b = which ? branch1 : branch0;
                     if(b) { node = get(b); }
                     else  { if(which) {branch1 = used+1;} else {branch0 = used+1;} put(b = ++used, node = {0}); }
@@ -328,7 +331,7 @@ namespace gunzip_ns
     {
         RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4> Lengths; // Lengths are in 0..15 range. 160 bytes are allocated.
         RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, PoolSize, HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
-        hufftree tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
+        hufftree<HuffNodeBits> tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
         std::uint_least8_t BitCache = 0, BitCount = 0;
 
         template<typename InputFunctor, bool Abortable>
@@ -363,9 +366,9 @@ namespace gunzip_ns
         }
 
         template<typename InputFunctor, bool Abortable>
-        std::uint_least32_t HuffRead(InputFunctor&& input, hufftree& tree, bool which)
+        std::uint_least32_t HuffRead(InputFunctor&& input, hufftree<HuffNodeBits>& tree, bool which)
         {
-            huffnode tmpnode = tree.get(which ? tree.branch1 : tree.branch0);
+            huffnode<HuffNodeBits> tmpnode = tree.get(which ? tree.branch1 : tree.branch0);
             while(tmpnode.GetBranch1())
             {
                 auto p = GetBits<InputFunctor,Abortable>(std::forward<InputFunctor>(input), 1);
@@ -402,16 +405,16 @@ namespace gunzip_ns
     }
 
     inline unsigned dbase(unsigned distcode) { return GetWTable<>()[distcode]; }
-    inline unsigned lbase(unsigned lencode) { return GetBTable<>()[lencode-257+0] + 3; }
+    inline unsigned lbase(unsigned lencode)  { return GetBTable<>()[lencode-257+0] + 3; }
     //inline unsigned dbits(unsigned distcode) { return GetBTable<>()[distcode+32] & 0xF; }
     //inline unsigned lbits(unsigned lencode) { return GetBTable<>()[lencode-257+32] >> 4; }
 #else
     inline unsigned dbase(unsigned distcode) { return (1 + (distcode>=4 ? ((2+distcode%2) << (distcode/2-1)) : distcode)); }
-    inline unsigned lbase(unsigned lencode) { return (lencode > 285 ? 3 : ((lencode >= 265) ? (((lencode-257)%4+4) << ((lencode-257)/4-1)) + (lencode==285 ? 2 : 3) : (lencode-254))); }
+    inline unsigned lbase(unsigned lencode)  { return (lencode > 285 ? 3 : ((lencode >= 265) ? (((lencode-257)%4+4) << ((lencode-257)/4-1)) + (lencode==285 ? 2 : 3) : (lencode-254))); }
 #endif
     inline unsigned dbits(unsigned distcode) { return distcode>=4 ? distcode/2-1 : 0; }
-    inline unsigned lbits(unsigned lencode) { return ((lencode>=265 && lencode<285) ? ((lencode-257)/4-1) : 0); }
-    inline unsigned order(unsigned index) { return index<3 ? (index+16) : ((index%2) ? (1-index/2)&7 : (6+index/2)); }
+    inline unsigned lbits(unsigned lencode)  { return ((lencode>=265 && lencode<285) ? ((lencode-257)/4-1) : 0); }
+    inline unsigned order(unsigned index)    { return index<3 ? (index+16) : ((index%2) ? (1-index/2)&7 : (6+index/2)); }
 
     template<>
     struct DeflateState<true>: public DeflateState<false>
@@ -528,37 +531,7 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
     for(;;)
     {
         GetBits(3, header);
-        if(!(header & 4)) // Fixed block
-        {
-            if(header < 2) // Copy stored block data
-            {
-                DummyGetBits(state.BitCount%8); // Go to byte boundary (discard a few bits)
-                GetBits(32, std::uint_least32_t a);
-                Fail_If(((a ^ (a >> 16)) & 0xFFFF) != 0xFFFF);
-                // Note: It is valid for (lower 16 bits of) "a" to be 0 here.
-                // It is sometimes used for aligning the stream to byte boundary.
-                while(a-- & 0xFFFF)
-                {
-                    GetBits(8, unsigned char octet);
-                    while(OutputHelper<Abortable&2>::output(output, octet)) { return 2; }
-                }
-                goto skipdef;
-            }
-            if(state.cur_table != &state.tables_fixed)
-            {
-                for(unsigned n=0; n<9; ++n) state.Lengths.template WSet<64>((n*16+0)/16,    0x8888888888888888ull);
-                for(unsigned n=0; n<7; ++n) state.Lengths.template WSet<64>((n*16+0x90)/16, 0x9999999999999999ull);
-                for(unsigned n=0; n<4; ++n) state.Lengths.template WSet<32>((n*8+0x100)/8,  (7+n/3)*0x11111111u);
-                for(unsigned n=0; n<2; ++n) state.Lengths.template WSet<64>((n*16+0x120)/16,0x5555555555555555ull);
-                state.tables_fixed.Create(0, 288, state.Lengths, 0);   // 575 used here
-                state.tables_fixed.Create(1, 32,  state.Lengths, 288); // 63 used here
-                assert(state.tables_fixed.used == 638 && state.tables_fixed.used <= PoolSize);
-                // ^state.tables_fixed has always 638 elements. If this assertion fails,
-                // something is wrong. Maybe coincidentally same as (288+32-1)*2.
-                state.cur_table = &state.tables_fixed;
-            }
-        }
-        else // Dynamic block
+        if(header & 4) // Dynamic block
         {
             Fail_If(header & 2);
             std::uint_least16_t nlen_ndist_ncode;
@@ -599,6 +572,36 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             state.cur_table = &state.tables_dyn;
             #undef nlen
             #undef ndist
+        }
+        else           // Fixed block
+        {
+            if(header < 2) // Copy stored block data
+            {
+                DummyGetBits(state.BitCount%8); // Go to byte boundary (discard a few bits)
+                GetBits(32, std::uint_least32_t a);
+                Fail_If(((a ^ (a >> 16)) & 0xFFFF) != 0xFFFF);
+                // Note: It is valid for (lower 16 bits of) "a" to be 0 here.
+                // It is sometimes used for aligning the stream to byte boundary.
+                while(a-- & 0xFFFF)
+                {
+                    GetBits(8, unsigned char octet);
+                    while(OutputHelper<Abortable&2>::output(output, octet)) { return 2; }
+                }
+                goto skipdef;
+            }
+            if(state.cur_table != &state.tables_fixed)
+            {
+                for(unsigned n=0; n<9; ++n) state.Lengths.template WSet<64>((n*16+0)/16,    0x8888888888888888ull);
+                for(unsigned n=0; n<7; ++n) state.Lengths.template WSet<64>((n*16+0x90)/16, 0x9999999999999999ull);
+                for(unsigned n=0; n<4; ++n) state.Lengths.template WSet<32>((n*8+0x100)/8,  (7+n/3)*0x11111111u);
+                for(unsigned n=0; n<2; ++n) state.Lengths.template WSet<64>((n*16+0x120)/16,0x5555555555555555ull);
+                state.tables_fixed.Create(0, 288, state.Lengths, 0);   // 575 used here
+                state.tables_fixed.Create(1, 32,  state.Lengths, 288); // 63 used here
+                assert(state.tables_fixed.used == 638 && state.tables_fixed.used <= PoolSize);
+                // ^state.tables_fixed has always 638 elements. If this assertion fails,
+                // something is wrong. Maybe coincidentally same as (288+32-1)*2.
+                state.cur_table = &state.tables_fixed;
+            }
         }
         // Do actual deflating.
         for(;;)
