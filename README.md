@@ -55,7 +55,7 @@ And there are prototypes that are safe.
 
 ```C++
 template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
-int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy); // (1) (2) (3)
+int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy); // (1) (3)
 
 template<typename InputFunctor, typename OutputFunctor>
 int Deflate(InputFunctor&& input, OutputFunctor&& output); // (1) (2) (7)
@@ -76,7 +76,7 @@ template<typename ForwardIterator, typename OutputFunctor>
 int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output); // (2) (6) (7)
 
 template<typename ForwardIterator, typename OutputFunctor, typename WindowFunctor>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output, WindowFunctor&& outputcopy); // (2) (3) (6)
+int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output, WindowFunctor&& outputcopy); // (3) (6)
 
 template<typename InputIterator, typename OutputIterator>
 void Deflate(InputIterator&& input, OutputIterator&& output); // (7) (9)
@@ -90,7 +90,9 @@ and the returned value is smaller than 0 or larger than 255, the decompression a
 
 2) If the output functor (`output`) returns a `bool`, and the returned value is `true`, the decompression aborts with return value 2.
 
-3) If the window function returns an integer type, and the returned value is other than 0, the decompression aborts with return value 3.
+3) If the output functor (`output`) returns a `bool`, and the returned value is `true`, the decompression aborts with return value 2.    
+If the window function returns an integer type, and the returned value is other than 0, the decompression aborts with return value 3.    
+If either the window function returns `void`, or the output functor does not return a `bool`, aborting on output-full will not be compiled.
 
 4) If `target_limit` bytes have been written into `target` and the decompression is not yet complete, the decompression aborts with return value 2.
 
@@ -103,6 +105,46 @@ and the returned value is smaller than 0 or larger than 255, the decompression a
 8) The output data buffer is assumed to persist during the call and doubles as the sliding window for the decompression.
 
 9) If the input iterator deferences into a value outside the 0 — 255 range, the decompression aborts with return value 1.
+
+```C++
+// An InputFunctor has the following prototype,
+// wherein type1 is convertible into unsigned char:
+type1 input()
+
+// An OutputFunctor has one of the following two prototypes,
+// wherein type1 can accept unsigned int parameters in range 0-255:
+void output(type1 byte_to_output)
+bool output(type1 byte_to_output)
+
+// A WindowFunctor has one of the following two prototypes,
+// wherein type1 can accept unsigned int parameters in range 0-258,
+// and     type2 can accept unsigned int parameters:
+void  outputcopy(type1 length, type2 offs)
+type2 outputcopy(type1 length, type2 offs)
+
+// A ForwardIterator must have at least the following operations defined,
+// where type1 is convertible into unsigned char:
+const type1& operator*() const
+bool operator==(const ForwardIterator&) const
+ForwardIterator operator++(int)
+
+// A RandomAccessIterator must have at least the following operations defined,
+// where type1 is convertible into unsigned char,
+// and type2 is a signed integer type (may be negative):
+type1& operator*()
+type1& operator[] (type2)
+RandomAccessIterator operator++(int)
+
+// An InputIterator must have at least the following operations defined,
+// where type1 is convertible into unsigned char:
+const type1& operator*() const
+InputIterator operator++(int)
+
+// A OutputIterator must have at least the following operations defined,
+// where type1 is convertible into unsigned char:
+type1& operator*() const
+OutputIterator operator++(int)
+```
 
 ## Example use:
 

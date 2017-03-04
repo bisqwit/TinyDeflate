@@ -354,6 +354,7 @@ namespace gunzip_ns
                     return ~std::uint_least64_t(0); // error
                 }
                 unsigned eat = numbits-acquired;
+                byte &= 0xFF;
                 if(eat <= 8)
                 {
                     result |= ((std::uint_fast64_t)(byte & ((1u << eat)-1))) << acquired;
@@ -361,7 +362,7 @@ namespace gunzip_ns
                     BitCache = byte >> eat;
                     return result;
                 }
-                result |= ((std::uint_fast64_t)byte) << acquired;
+                result |= ((std::uint_fast64_t)(byte)) << acquired;
             }
         }
 
@@ -642,9 +643,9 @@ skipdef:if(header & 1) break; // last block flag
 #define DeflIsOutputIterator       true /* TODO: create rule */
 
 #define DeflInputAbortable_InputFunctor \
-                                 (1* !(std::is_same<typename std::result_of<InputFunctor()>, unsigned char>::value \
-                                    || std::is_same<typename std::result_of<InputFunctor()>,   signed char>::value \
-                                    || std::is_same<typename std::result_of<InputFunctor()>,          char>::value))
+                                 (1* !(std::is_same<typename std::result_of<InputFunctor()>::type, unsigned char>::value \
+                                    || std::is_same<typename std::result_of<InputFunctor()>::type,   signed char>::value \
+                                    || std::is_same<typename std::result_of<InputFunctor()>::type,          char>::value))
 #define DeflOutputAbortable_OutputFunctor \
                                  (2* std::is_same<typename std::result_of<OutputFunctor(int)>::type, bool>::value)
 #define DeflOutputAbortable_WindowFunctor \
@@ -675,7 +676,6 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor, int>::type
 
     constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor
                                       | DeflOutputAbortable_OutputFunctor;
-
     auto Put = [&](unsigned char l)
     {
         state.Window.Data[state.Window.Head++ & 32767u] = l;
