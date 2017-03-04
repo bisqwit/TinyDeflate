@@ -599,24 +599,28 @@ skipdef:if(header & 1) break; // last block flag
     return 0;
 }
 
-#define DeflIsInputFunctor         (std::is_convertible<std::result_of_t<InputFunctor()>,int>::value)
-#define DeflIsOutputFunctor        (std::is_same<std::result_of_t<OutputFunctor(int)>,void>::value|1)
-#define DeflIsWindowFunctor        (std::is_same<std::result_of_t<WindowFunctor(int,int)>,void>::value|1)
+#define DeflIsInputFunctor  (std::is_convertible<std::result_of_t<InputFunctor()>,int>::value)
+#define DeflIsOutputFunctor        (std::is_same<std::result_of_t<OutputFunctor(int)>,void>::value \
+                                 || std::is_same<std::result_of_t<OutputFunctor(int)>,bool>::value)
+#define DeflIsWindowFunctor        (std::is_convertible<std::result_of_t<WindowFunctor(int,int)>,int>::value \
+                                        || std::is_same<std::result_of_t<WindowFunctor(int,int)>,void>::value)
 
-#define DeflIsForwardIterator      (std::is_convertible<decltype(*std::decay_t<ForwardIterator>()), int>::value \
+#define DeflIsForwardIterator   (std::is_convertible<typename std::iterator_traits<std::decay_t<ForwardIterator>>::value_type, unsigned char>::value \
                                     && (std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::forward_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::bidirectional_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::random_access_iterator_tag>::value))
 
-#define DeflIsInputIterator        (std::is_convertible<decltype(*std::decay_t<InputIterator>()), int>::value \
+#define DeflIsInputIterator     (std::is_convertible<typename std::iterator_traits<std::decay_t<InputIterator>>::value_type, unsigned char>::value \
                                     && (std::is_same<typename std::iterator_traits<std::decay_t<InputIterator>>::iterator_category, std::input_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<InputIterator>>::iterator_category, std::forward_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<InputIterator>>::iterator_category, std::bidirectional_iterator_tag>::value))
 
-#define DeflIsRandomAccessIterator (std::is_convertible<decltype(*std::decay_t<RandomAccessIterator>()), int>::value \
+#define DeflIsRandomAccessIterator (std::is_convertible<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::value_type, unsigned char>::value \
+                                  && !std::is_const<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::reference>::value \
                                     && std::is_same<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::iterator_category, std::random_access_iterator_tag>::value)
 
-#define DeflIsOutputIterator       (std::is_convertible<decltype(*std::decay_t<OutputIterator>()), int>::value \
+#define DeflIsOutputIterator    (std::is_convertible<typename std::iterator_traits<std::decay_t<OutputIterator>>::value_type, unsigned char>::value \
+                                   && !std::is_const<typename std::iterator_traits<std::decay_t<OutputIterator>>::reference>::value \
                                     && (std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::output_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::forward_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::bidirectional_iterator_tag>::value))
