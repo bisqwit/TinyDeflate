@@ -20,8 +20,9 @@ In addition, if you neither decompress into a raw memory area nor supply your ow
 
 * No dynamic memory is allocated under any circumstances, unless your user-supplied functors do it.
 * Aside from assert() in assert.h and some template metaprogramming tools in type_traits, no standard library functions are used.
-* There are no constant arrays or global variables.
+* No global variables.
 * No exceptions or runtime type identification is required.
+* Option to compile without constant arrays.
 
 ## Rationale
 

@@ -23,8 +23,9 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 #include <assert.h>
-#include <type_traits>
 #include <utility>     // std::forward
+#include <cstdint>     // integer sizes
+#include <type_traits>
 
 #if !1 //Documentation purposes only; the actual prototypes are littered with std::enable_ifs.
 // Deflate(): This is the public method declared (later) in this file.
@@ -106,44 +107,45 @@ namespace gunzip_ns
     static constexpr bool USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION = true; /* 12 bytes save */
     static constexpr bool USE_BITARRAY_FOR_LENGTHS = true;                   /* 160 bytes save */
     static constexpr bool USE_BITARRAY_FOR_HUFFNODES = true;                 /* 392 bytes save */
+    #define DEFLATE_USE_DATA_TABLES
 }
 
 // RandomAccessBitArray: An engine for arrays of data items that are smaller than a byte
-template<typename U = unsigned long long>
+template<typename U = std::uint_least64_t>
 struct RandomAccessBitArrayBase
 {
     static constexpr unsigned Ubytes = sizeof(U), Ubits = Ubytes*8;
 
     template<unsigned Size>
-    static unsigned long long Get(const U* data, unsigned index)
+    static std::uint_fast64_t Get(const U* data, unsigned index)
     {
         unsigned bitpos = index*Size, unitpos = bitpos / Ubits, shift = bitpos % Ubits;
-        unsigned long long result = data[unitpos] >> shift;
+        std::uint_fast64_t result = data[unitpos] >> shift;
         assert(Size <= sizeof(result)*8);
         unsigned acquired = Ubits - shift;
         for(; acquired < Size; acquired += Ubits)
         {
-            result += (unsigned long long)data[++unitpos] << acquired;
+            result += (std::uint_fast64_t)data[++unitpos] << acquired;
         }
-        return (Size >= sizeof(result)*8) ? result : (result & ((1ull << Size)-1));
+        return (Size >= sizeof(result)*8) ? result : (result & ((std::uint64_t(1) << Size)-1));
     }
 
     template<unsigned Size, bool update = false>
-    static void Set(U* data, unsigned index, unsigned long long value)
+    static void Set(U* data, unsigned index, std::uint_fast64_t value)
     {
         unsigned bitpos = index*Size, unitpos = bitpos / Ubits, eat = 0;
         // Make sure our storage unit is at least as bit as value
         assert(Ubits >= sizeof(value)*8);
-        //assert(Size >= sizeof(value)*8 || value < (1ull << Size));
+        //assert(Size >= sizeof(value)*8 || value < (std::uint64_t(1) << Size));
 
         if(Size % Ubits != 0)
         {
             unsigned shift = bitpos % Ubits;
             eat = Ubits - shift; if(eat > Size) eat = Size;
 
-            assert(eat < sizeof(unsigned long long)*8);
+            assert(eat < sizeof(std::uint_fast64_t)*8);
             assert(shift + eat <= Ubits);
-            unsigned long long vmask = (1ull << eat)-1;
+            std::uint_fast64_t vmask = (std::uint64_t(1) << eat)-1;
             if(update)
                 data[unitpos] = (data[unitpos] & ~(vmask << shift)) | (value << shift);
             else
@@ -161,7 +163,7 @@ struct RandomAccessBitArrayBase
                     eat = remain;
                     if(update)
                     {
-                        unsigned long long vmask = ((1ull << eat)-1);
+                        std::uint_fast64_t vmask = ((std::uint64_t(1) << eat)-1);
                         data[unitpos] = (data[unitpos] & ~vmask) | value;
                     }
                     else
@@ -181,20 +183,20 @@ struct RandomAccessBitArrayBase
     }
 };
 
-template<unsigned Nbits, typename U = unsigned long long>
+template<unsigned Nbits, typename U = std::uint_least64_t>
 struct RandomAccessBitArray
 {
     static constexpr unsigned Ubytes = sizeof(U), Ubits = Ubytes*8, Nunits = (Nbits+Ubits-1)/Ubits;
     U data[Nunits];
 
     template<unsigned Size>
-    inline unsigned long long Get(unsigned index) const
+    inline std::uint_fast64_t Get(unsigned index) const
     {
         return RandomAccessBitArrayBase<U>::template Get<Size>(data, index);
     }
 
     template<unsigned Size, bool update = false>
-    inline void Set(unsigned index, unsigned long long value)
+    inline void Set(unsigned index, std::uint_fast64_t value)
     {
         RandomAccessBitArrayBase<U>::template Set<Size,update>(data, index, value);
     }
@@ -202,11 +204,10 @@ struct RandomAccessBitArray
 
 namespace gunzip_ns
 {
-    template<unsigned bits, int type = (bits>16) ? ((bits>32) ? 8 : 4) : ((bits>8) ? 2 : 1)>
-    struct SmallestType { using result = unsigned long long; };
-    template<unsigned bits> struct SmallestType<bits,1> { using result = unsigned char; };
-    template<unsigned bits> struct SmallestType<bits,2> { using result = unsigned short; };
-    template<unsigned bits> struct SmallestType<bits,4> { using result = unsigned; };
+    template<unsigned bits>
+    using SmallestType = typename std::conditional< (bits>16),
+                         typename std::conditional< (bits>32), std::uint_least64_t, std::uint_least32_t>::type,
+                         typename std::conditional< (bits> 8), std::uint_least16_t, std::uint_least8_t >::type>::type;
 
     template<bool packed, unsigned Dimension, unsigned ElementSize>
     struct RandomAccessArray {};
@@ -215,23 +216,23 @@ namespace gunzip_ns
     struct RandomAccessArray<true, Dim, Elem>
     {
         RandomAccessBitArray<Dim*Elem> impl;
-        inline unsigned long long Get(unsigned index) const { return impl.template Get<Elem>(index); }
-        inline void Set(unsigned index, unsigned value) { impl.template Set<Elem,true>(index, value); }
-        inline void QSet(unsigned index, unsigned value) { impl.template Set<Elem,false>(index, value); }
+        inline std::uint_fast64_t Get(unsigned index) const { return impl.template Get<Elem>(index); }
+        inline void Set(unsigned index, std::uint_fast32_t value) { impl.template Set<Elem,true>(index, value); }
+        inline void QSet(unsigned index, std::uint_fast32_t value) { impl.template Set<Elem,false>(index, value); }
         template<unsigned Bits>
-        inline void WSet(unsigned index, unsigned long long value) { impl.template Set<Bits,false>(index, value); }
+        inline void WSet(unsigned index, std::uint_fast64_t value) { impl.template Set<Bits,false>(index, value); }
     };
 
     template<unsigned Dim, unsigned Elem>
     struct RandomAccessArray<false, Dim, Elem>
     {
-        typedef typename SmallestType<Elem>::result E;
+        typedef SmallestType<Elem> E;
         E data[Dim];
         inline E Get(unsigned index) const       { return data[index]; }
         inline void Set(unsigned index, E value) { data[index] = value; }
         inline void QSet(unsigned index, E value) { data[index] = value; }
         template<unsigned Bits>
-        inline void WSet(unsigned index, unsigned long long value)
+        inline void WSet(unsigned index, std::uint_fast64_t value)
         {
             index *= Bits/Elem;
             for(unsigned b=0; b<Bits; b+=Elem, value>>=Elem)
@@ -252,7 +253,7 @@ namespace gunzip_ns
     static_assert(!USE_BITARRAY_FOR_HUFFNODES || PoolSize*PoolSize*288  > (1 << (HuffNodeBits-1)), "Too many HuffNodeBits");
     struct huffnode
     {
-        SmallestType<HuffNodeBits>::result intval; // Any integer type at least HuffNodeBits bits wide
+        SmallestType<HuffNodeBits> intval; // Any integer type at least HuffNodeBits bits wide
         static_assert(sizeof(intval)*8 >= HuffNodeBits, "intval is too small");
         static constexpr unsigned BranchMul1 = USE_BITARRAY_FOR_HUFFNODES ? 640 : 1024;
         static constexpr unsigned BranchMul2 = USE_BITARRAY_FOR_HUFFNODES ? 640 : 1024;
@@ -262,21 +263,21 @@ namespace gunzip_ns
         unsigned GetBranch0() const { return intval % BranchMul1; }
         unsigned GetBranch1() const { return (intval / BranchMul1) % BranchMul2; }
         unsigned GetValue()   const { return (intval / (BranchMul1 * BranchMul2)); }
-        huffnode SetBranch0(unsigned b) { assert(b < PoolSize); return {intval += (b - GetBranch0())}; }
-        huffnode SetBranch1(unsigned b) { assert(b < PoolSize); return {intval += (b - GetBranch1()) * (BranchMul1)}; }
-        huffnode SetValue(unsigned b)   { assert(b < 288);      return {intval += (b - GetValue()) * (BranchMul1*BranchMul2)}; }
+        huffnode SetBranch0(unsigned b) { /*assert(b < PoolSize);*/ return {intval += (b - GetBranch0())}; }
+        huffnode SetBranch1(unsigned b) { /*assert(b < PoolSize);*/ return {intval += (b - GetBranch1()) * (BranchMul1)}; }
+        huffnode SetValue(unsigned b)   { /*assert(b < 288);*/      return {intval += (b - GetValue()) * (BranchMul1*BranchMul2)}; }
         static_assert(BranchMul1 >= PoolSize && BranchMul2 >= PoolSize
-            && (PoolSize-1) + BranchMul1*((PoolSize-1) + 287*BranchMul2) < (1ull << HuffNodeBits), "Illegal BranchMul values");
+            && (PoolSize-1) + BranchMul1*((PoolSize-1) + 287*BranchMul2) < (std::uint64_t(1) << HuffNodeBits), "Illegal BranchMul values");
     };
     struct hufftree
     {
         RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,PoolSize,HuffNodeBits>& storage;
-        unsigned short used    : 12; // Index of the next unused node in the pool
-        unsigned short branch0 : 10;
-        unsigned short branch1 : 10;
+        std::uint_least16_t used    : 12; // Index of the next unused node in the pool
+        std::uint_least16_t branch0 : 10;
+        std::uint_least16_t branch1 : 10;
 
-        huffnode get(unsigned n) const          { return { unsigned(storage.Get(n-1)) }; }
-        void     put(unsigned n, huffnode node) { storage.Set(n-1, node.intval); }
+        huffnode get(std::uint_fast16_t n) const          { return { SmallestType<HuffNodeBits>(storage.Get(n-1)) }; }
+        void     put(std::uint_fast16_t n, huffnode node) { storage.Set(n-1, node.intval); }
 
         // Create a huffman tree for num_values, with given lengths.
         // The tree will be put in branch[which]; other branch not touched.
@@ -293,7 +294,7 @@ namespace gunzip_ns
 
             for(unsigned a = 0; a < num_values; ++a)
             {
-                unsigned len = lengths.Get(offset+a); // Note: Can be zero.
+                std::uint_fast8_t len = lengths.Get(offset+a); // Note: Can be zero.
                 data.Set(len+CountOffset, data.Get(len+CountOffset) + 1); // increase count
             }
             for(unsigned a = 0; a < 15; a++)
@@ -301,19 +302,18 @@ namespace gunzip_ns
                          2u * (data.Get(a+OffsOffset) + data.Get(a+CountOffset)));
             // Largest values seen in wild for offs[16]: 16777216
             for(unsigned value = 0; value < num_values; ++value)
-                if(unsigned length = lengths.Get(offset+value))
+                if(std::uint_fast8_t length = lengths.Get(offset+value))
                 {
                     huffnode node;
-                    unsigned b = which ? branch1 : branch0;
+                    std::uint_fast16_t b = which ? branch1 : branch0;
                     if(b) { node = get(b); }
                     else  { if(which) {branch1 = used+1;} else {branch0 = used+1;} put(b = ++used, node = {0}); }
 
-                    unsigned q = data.Get(length+OffsOffset); data.Set(length+OffsOffset, q+1); // q = offset[length]++
-                    assert(length > 0);
+                    std::uint_least32_t q = data.Get(length+OffsOffset); data.Set(length+OffsOffset, q+1); // q = offset[length]++
                     for(q <<= (32u-length); length--; )
                     {
                         bool bit = q >> 31; q <<= 1;
-                        unsigned nextb = bit ? node.GetBranch1() : node.GetBranch0();
+                        std::uint_fast16_t nextb = bit ? node.GetBranch1() : node.GetBranch0();
                         if(nextb)  { node = get(b = nextb); }
                         else       { put(b, bit ? node.SetBranch1(used+1) : node.SetBranch0(used+1));
                                      put(b = ++used, node = {0}); }
@@ -329,18 +329,18 @@ namespace gunzip_ns
         RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4> Lengths; // Lengths are in 0..15 range. 160 bytes are allocated.
         RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, PoolSize, HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
         hufftree tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
-        unsigned char BitCache = 0, BitCount = 0;
+        std::uint_least8_t BitCache = 0, BitCount = 0;
 
         template<typename InputFunctor, bool Abortable>
-        std::pair<unsigned long long, bool> GetBits(InputFunctor&& input, unsigned numbits)
+        std::uint_least64_t GetBits(InputFunctor&& input, unsigned numbits)
         {
-            unsigned long long result = BitCache;
+            std::uint_fast64_t result = BitCache;
             if(numbits <= BitCount)
             {
                 BitCount -= numbits;
                 BitCache >>= numbits;
                 result &= ((1u << numbits)-1); // 0-8
-                return {result,false};
+                return result;
             }
             for(unsigned acquired = BitCount; ; acquired += 8)
             {
@@ -348,42 +348,75 @@ namespace gunzip_ns
                 if(Abortable && (byte & ~0xFFu))
                 {
                     // Note: Throws away bits already eaten from BitCache
-                    return {0,true};
+                    return ~std::uint_least64_t(0); // error
                 }
                 unsigned eat = numbits-acquired;
                 if(eat <= 8)
                 {
-                    result |= ((unsigned long long)(byte & ((1u << eat)-1))) << acquired;
+                    result |= ((std::uint_fast64_t)(byte & ((1u << eat)-1))) << acquired;
                     BitCount =       8-eat;
                     BitCache = byte >> eat;
-                    return {result,false};
+                    return result;
                 }
-                result |= ((unsigned long long)byte) << acquired;
+                result |= ((std::uint_fast64_t)byte) << acquired;
             }
         }
 
         template<typename InputFunctor, bool Abortable>
-        std::pair<unsigned,bool> HuffRead(InputFunctor&& input, hufftree& tree, unsigned which)
+        std::uint_least32_t HuffRead(InputFunctor&& input, hufftree& tree, bool which)
         {
             huffnode tmpnode = tree.get(which ? tree.branch1 : tree.branch0);
             while(tmpnode.GetBranch1())
             {
                 auto p = GetBits<InputFunctor,Abortable>(std::forward<InputFunctor>(input), 1);
-                if(Abortable && p.second)
+                if(Abortable && !~p)
                 {
                     // Note: Throws away progress already made traversing the tree
-                    return p;
+                    return ~std::uint_least32_t(0); // error flag
                 }
-                tmpnode = tree.get(p.first ? tmpnode.GetBranch1() : tmpnode.GetBranch0());
+                tmpnode = tree.get(p ? tmpnode.GetBranch1() : tmpnode.GetBranch0());
             }
-            return {tmpnode.GetValue(), false};
+            return tmpnode.GetValue();
         }
     };
+
+#ifdef DEFLATE_USE_DATA_TABLES
+    template<bool=0> // Using a dummy template parameter makes this function and its data weak,
+    inline const std::uint_least8_t* GetBTable() // removing linker problems in multi-module use
+    {
+        static const std::uint_least8_t data[] {
+            // Length bases (0-31)
+            0,1,2,3,4,5,6,7,8,10,12,14,16,20,24,28,32,40,48,56,64,80,96,112,128,160,192,224,255, 0,0,0
+            // Length bits and distance bits (29-60) (overlap 3 bytes)
+            //               0x00,0x01,0x01,0x02,0x02,0x13,0x13,0x14,0x14,0x25,0x25,0x26,0x26,
+            //0x37,0x37,0x38,0x38,0x49,0x49,0x4A,0x4A,0x5B,0x5B,0x5C,0x5C,0x0D,0x0D,0x00,0x00
+        };
+        return data;
+    }
+    template<bool=0>
+    inline const std::uint_least16_t* GetWTable()
+    {
+        static const std::uint_least16_t data[32] {
+             1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577, 0,0 };
+        return data;
+    }
+
+    inline unsigned dbase(unsigned distcode) { return GetWTable<>()[distcode]; }
+    inline unsigned lbase(unsigned lencode) { return GetBTable<>()[lencode-257+0] + 3; }
+    //inline unsigned dbits(unsigned distcode) { return GetBTable<>()[distcode+32] & 0xF; }
+    //inline unsigned lbits(unsigned lencode) { return GetBTable<>()[lencode-257+32] >> 4; }
+#else
+    inline unsigned dbase(unsigned distcode) { return (1 + (distcode>=4 ? ((2+distcode%2) << (distcode/2-1)) : distcode)); }
+    inline unsigned lbase(unsigned lencode) { return (lencode > 285 ? 3 : ((lencode >= 265) ? (((lencode-257)%4+4) << ((lencode-257)/4-1)) + (lencode==285 ? 2 : 3) : (lencode-254))); }
+#endif
+    inline unsigned dbits(unsigned distcode) { return distcode>=4 ? distcode/2-1 : 0; }
+    inline unsigned lbits(unsigned lencode) { return ((lencode>=265 && lencode<285) ? ((lencode-257)/4-1) : 0); }
+    inline unsigned order(unsigned index) { return index<3 ? (index+16) : ((index%2) ? (1-index/2)&7 : (6+index/2)); }
 
     template<>
     struct DeflateState<true>: public DeflateState<false>
     {
-        struct { unsigned char Data[32768u]; unsigned short Head=0; } Window;
+        struct { unsigned char Data[32768u]; std::uint_least16_t Head=0; } Window;
     };
 
     template<bool Abortable>
@@ -396,7 +429,7 @@ namespace gunzip_ns
             return false;
         }
         template<typename WindowFunctor>
-        static inline bool outputcopy(WindowFunctor&& outputcopy, unsigned short length, unsigned offset)
+        static inline bool outputcopy(WindowFunctor&& outputcopy, std::uint_least16_t length, std::uint_fast32_t offset)
         {
             outputcopy(length, offset);
             return false;
@@ -412,7 +445,7 @@ namespace gunzip_ns
             return output(byte);
         }
         template<typename WindowFunctor>
-        static inline bool outputcopy(WindowFunctor&& outputcopy, unsigned short& length, unsigned offset)
+        static inline bool outputcopy(WindowFunctor&& outputcopy, std::uint_least16_t& length, std::uint_fast16_t offset)
         {
             length = outputcopy(length, offset);
             return length != 0;
@@ -451,19 +484,20 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
 
     // Bit-by-bit input routine
     #define DummyGetBits(numbits) do { \
-        if(state.template GetBits<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), numbits).second && (Abortable&1)) \
-            return 1; } while(0)
+        auto p = state.template GetBits<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), numbits); \
+        if((Abortable & 1) && !~p) return 1; \
+    } while(0)
 
     #define GetBits(numbits, target) \
         auto p = state.template GetBits<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), numbits); \
-        if((Abortable & 1) && p.second) return 1; \
-        target = p.first
+        if((Abortable & 1) && !~p) return 1; \
+        target = p
 
     // Huffman tree read routine.
     #define HuffRead(tree, which, target) \
         auto p = state.HuffRead<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), tree, which); \
-        if((Abortable & 1) && p.second) return 1; \
-        target = p.first
+        if((Abortable & 1) && !~p) return 1; \
+        target = p
 
     #define Fail_If(condition) do { \
         /*assert(!(condition));*/ \
@@ -471,14 +505,14 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
     } while(0)
 
     // Read stream header
-    GetBits(16, unsigned short header);
+    GetBits(16, std::uint_least16_t header);
     // ^ Read deflate header: method[4] ; winsize[4] ; checksum[8]
     if(header == 0x8B1F) // Is it actually a gzip header?
     {
         // Get format identifier, flags, MTIME, XFL and OS
         GetBits(64, header); Fail_If((header & 0xFF) != 8); // Format identifier should be 8
         if(header&0x0400) // Skip extra fields as indicated by FEXTRA
-            { GetBits(16, unsigned q); DummyGetBits(8*q); }
+            { GetBits(16, std::uint_fast16_t q); DummyGetBits(8*q); }
         if(header&0x0800) for(;;) { GetBits(8, bool q); if(!q) break; } // NAME: Skip filename if FNAME was present
         if(header&0x1000) for(;;) { GetBits(8, bool q); if(!q) break; } // COMMENT: Skip comment if FCOMMENT was present
         if(header&0x0200) { DummyGetBits(16); }      // HCRC: Skip FCRC if was present
@@ -499,7 +533,7 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             if(header < 2) // Copy stored block data
             {
                 DummyGetBits(state.BitCount%8); // Go to byte boundary (discard a few bits)
-                GetBits(32, unsigned a);
+                GetBits(32, std::uint_least32_t a);
                 Fail_If(((a ^ (a >> 16)) & 0xFFFF) != 0xFFFF);
                 // Note: It is valid for (lower 16 bits of) "a" to be 0 here.
                 // It is sometimes used for aligning the stream to byte boundary.
@@ -527,32 +561,30 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
         else // Dynamic block
         {
             Fail_If(header & 2);
-            unsigned short nlen_ndist_ncode;
+            std::uint_least16_t nlen_ndist_ncode;
             GetBits(14, nlen_ndist_ncode);
             #define nlen  (((nlen_ndist_ncode >> 0u) & 0x1Fu) + 257u) // 257..288
             #define ndist (((nlen_ndist_ncode >> 5u) & 0x1Fu) + 1u)   // 1..32
-            assert(nlen+ndist <= 288+32);
 
             {state.Lengths.template WSet<32*4>(0, 0); // 19 needed, but round to nice unit
-            unsigned char ncode = ((nlen_ndist_ncode >> 10u) + 4u); // 4..19
-            unsigned long long lenlens; GetBits(ncode*3, lenlens);  // Max: 19*3 = 57 bits
+            std::uint_least8_t ncode = ((nlen_ndist_ncode >> 10u) + 4u); // 4..19
+            std::uint_fast64_t lenlens; GetBits(ncode*3, lenlens);  // Max: 19*3 = 57 bits
             for(unsigned a=0; a < ncode; ++a)
-                state.Lengths.QSet(a<3 ? (a+16) : ((a%2) ? (1-a/2)&7 : (6+a/2)), ((lenlens >> (a*3)) & 7));}
+                state.Lengths.QSet(order(a), ((lenlens >> (a*3)) & 7));}
             state.tables_dyn.Create(0, 19, state.Lengths, 0); // length-lengths
 
             state.Lengths = {}; // clear at least (nlen+ndist) nibbles; easiest to clear it all
             //state.Lengths.Set<(288+32)*4,true>(0,0);
-            unsigned char lencode = 0;
-            for(unsigned short code = 0; code < nlen+ndist; ) // nlen+ndist is 258..320
+            std::uint_least8_t lencode = 0;
+            for(std::uint_least16_t code = 0; code < nlen+ndist; ) // nlen+ndist is 258..320
             {
-                HuffRead(state.tables_dyn, 0, unsigned char what); // 0-18
-                assert(what < 19);
+                HuffRead(state.tables_dyn, 0, std::uint_least8_t what); // 0-18
 
                 if(!(what & 16))    { lencode = what * 0x11u;           what = 0x01; } // 1 times (what < 16) (use what, set prev)
                 else if(what < 17)  { lencode = (lencode >> 4) * 0x11u; what = 0x23; } // 3..6 (use prev)
                 else if(what == 17) { lencode &= 0xF0;                  what = 0x33; } // 3..10   (use 0)
                 else                { lencode &= 0xF0;                  what = 0x7B; } // 11..138 (use 0)
-                {GetBits(what >> 4, unsigned char num); num += (what & 0xF);
+                {GetBits(what >> 4, std::uint_least8_t num); num += (what & 0xF);
 
                 Fail_If((code+num) > (nlen+ndist));
                 while(num--) { state.Lengths.QSet(code++, lencode & 0xF); }}
@@ -571,21 +603,21 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
         // Do actual deflating.
         for(;;)
         {
-            HuffRead(*state.cur_table, 0, unsigned short code); // 0..287
-            if(!(code & -256)) // 0..255: literal byte
+            HuffRead(*state.cur_table, 0, std::uint_least16_t lencode); // 0..287
+            if(!(lencode & -256)) // 0..255: literal byte
             {
-                while(OutputHelper<Abortable&2>::output(output, code)) { return 2; }
+                while(OutputHelper<Abortable&2>::output(output, lencode)) { return 2; }
             }
-            else if(!(code & 0xFF)) break; // 256=end
+            else if(!(lencode & 0xFF)) break; // 256=end
             else // 257..287: length code for backwards reference
             {
-                GetBits(unsigned((code>=265 && code<285) ? ((code-257)/4-1) : 0), unsigned short length);
-                {HuffRead(*state.cur_table, 1, unsigned char distcode); // Read distance code (0..31)
-                {GetBits(/*dbits*/unsigned(distcode>=4 ? distcode/2-1 : 0), unsigned short offset);
+                GetBits(lbits(lencode), std::uint_least16_t length);
+                {HuffRead(*state.cur_table, 1, std::uint_least8_t distcode); // Read distance code (0..31)
+                {GetBits(dbits(distcode), std::uint_least16_t offset);
                 while(OutputHelper<Abortable&2>::outputcopy(
                     outputcopy,
-                    length + 3 + (code > 285 ? 0 : ((code >= 265) ? (((code-257)%4+4) << ((code-257)/4-1)) - (code==285) : (code-257))),
-                    offset + (1 + (distcode>=4 ? ((2+distcode%2) << (distcode/2-1)) : distcode)))) { return 3; }}}
+                    length + lbase(lencode),
+                    offset + dbase(distcode))) { return 3; }}}
             }
         }
 skipdef:if(header & 1) break; // last block flag
@@ -650,16 +682,16 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor, int>::type
     return Deflate<Abortable> (state,
         std::forward<InputFunctor>(input),
         Put,
-        [&](unsigned short length, unsigned offs)
+        [&](std::uint_least16_t length, std::uint_fast16_t offs)
         {
             // length=0 means that offs is the size of the window.
             for(; length>0; --length)
             {
                 unsigned char byte = state.Window.Data[(state.Window.Head - offs) & 32767u];
                 if(gunzip_ns::OutputHelper<Abortable&2>::output(Put, byte))
-                    return length;
+                    break;
             }
-            return (unsigned short)0;
+            return length;
         });
 }
 
@@ -672,7 +704,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::
     // Using a window functor, not a separate window.
     return Deflate<Abortable> (std::forward<InputFunctor>(input),
         [&](unsigned char l) { *target++ = l; },
-        [&](unsigned short length, unsigned offs)
+        [&](std::uint_least16_t length, std::uint_fast16_t offs)
         {
             // length=0 means that offs is the size of the window.
             for(; length--; ++target) { *target = *(target-offs); }
@@ -692,7 +724,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::
             target[target_size++] = l;
             return false;
         },
-        [&](unsigned short length, unsigned offs)
+        [&](std::uint_least16_t length, std::uint_fast16_t offs)
         {
             // length=0 means that offs is the size of the window.
             for(; length > 0; ++target_size, --length)
@@ -700,31 +732,31 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::
                 if(target_size >= target_limit) break;
                 target[target_size] = target[target_size - offs];
             }
-            return (unsigned short)0;
+            return length;
         });
 }
 
 template<typename InputFunctor, typename RandomAccessIterator>
 typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::type
-    Deflate(InputFunctor&& input, RandomAccessIterator&& output_begin, RandomAccessIterator&& output_end)
+    Deflate(InputFunctor&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end)
 {
     // Using a window functor, not a separate window.
     return Deflate(std::forward<InputFunctor>(input),
         [&](unsigned char l)
         {
-            if(output_begin == output_end) return true;
-            *output_begin++ = l;
+            if(target_begin == target_end) return true;
+            *target_begin++ = l;
             return false;
         },
-        [&](unsigned short length, unsigned offs)
+        [&](std::uint_least16_t length, std::uint_fast16_t offs)
         {
             // length=0 means that offs is the size of the window.
-            for(; length > 0; --length, ++output_begin)
+            for(; length > 0; --length, ++target_begin)
             {
-                if(output_begin == output_end) break;
-                *output_begin = *(output_begin - offs);
+                if(target_begin == target_end) break;
+                *target_begin = *(target_begin - offs);
             }
-            return (unsigned short)0;
+            return length;
         });
 }
 
@@ -764,14 +796,14 @@ typename std::enable_if<DeflIsInputIterator, int>::type
 template<typename ForwardIterator, typename RandomAccessIterator>
 typename std::enable_if<DeflIsForwardIterator && DeflIsRandomAccessIterator, int>::type
     Deflate(ForwardIterator&& begin,             ForwardIterator&& end,
-            RandomAccessIterator&& output_begin, RandomAccessIterator&& output_end)
+            RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end)
 {
     return Deflate(
         [&]() { return begin==end ? -1 : *begin++; },
         [&](unsigned char l)
         {
-            if(output_begin == output_end) return true;
-            *output_begin++ = l;
+            if(target_begin == target_end) return true;
+            *target_begin++ = l;
             return false;
         });
 }
