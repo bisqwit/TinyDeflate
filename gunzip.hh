@@ -188,13 +188,13 @@ struct RandomAccessBitArray
     U data[Nunits];
 
     template<unsigned Size>
-    unsigned long long Get(unsigned index) const
+    inline unsigned long long Get(unsigned index) const
     {
         return RandomAccessBitArrayBase<U>::template Get<Size>(data, index);
     }
 
     template<unsigned Size, bool update = false>
-    void Set(unsigned index, unsigned long long value)
+    inline void Set(unsigned index, unsigned long long value)
     {
         RandomAccessBitArrayBase<U>::template Set<Size,update>(data, index, value);
     }
@@ -327,37 +327,53 @@ namespace gunzip_ns
     struct DeflateState
     {
         RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4> Lengths; // Lengths are in 0..15 range. 160 bytes are allocated.
-
         RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, PoolSize, HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
         hufftree tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
-
-        unsigned long BitCache = 0;
-        unsigned char BitCount = 0;
+        unsigned char BitCache = 0, BitCount = 0;
 
         template<typename InputFunctor, bool Abortable>
-        std::pair<unsigned, bool> GetBits(InputFunctor&& input, unsigned numbits)
+        std::pair<unsigned long long, bool> GetBits(InputFunctor&& input, unsigned numbits)
         {
-            while(BitCount < numbits)
+            unsigned long long result = BitCache;
+            if(numbits <= BitCount)
             {
-                unsigned long byte = input();
-                if(Abortable && (byte & ~0xFFu)) return {0, true};
-                BitCache |= (byte & 0xFF) << BitCount;
-                BitCount += 8;
+                BitCount -= numbits;
+                BitCache >>= numbits;
+                result &= ((1u << numbits)-1); // 0-8
+                return {result,false};
             }
-            unsigned result = BitCache & ((1ul << numbits) - 1);
-            BitCache >>= numbits;
-            BitCount -= numbits;
-            return {result, false};
+            for(unsigned acquired = BitCount; ; acquired += 8)
+            {
+                unsigned byte = input();
+                if(Abortable && (byte & ~0xFFu))
+                {
+                    // Note: Throws away bits already eaten from BitCache
+                    return {0,true};
+                }
+                unsigned eat = numbits-acquired;
+                if(eat <= 8)
+                {
+                    result |= ((unsigned long long)(byte & ((1u << eat)-1))) << acquired;
+                    BitCount =       8-eat;
+                    BitCache = byte >> eat;
+                    return {result,false};
+                }
+                result |= ((unsigned long long)byte) << acquired;
+            }
         }
 
         template<typename InputFunctor, bool Abortable>
-        std::pair<unsigned,bool> HuffReadT(InputFunctor&& input, hufftree& tree, unsigned which)
+        std::pair<unsigned,bool> HuffRead(InputFunctor&& input, hufftree& tree, unsigned which)
         {
             huffnode tmpnode = tree.get(which ? tree.branch1 : tree.branch0);
             while(tmpnode.GetBranch1())
             {
                 auto p = GetBits<InputFunctor,Abortable>(std::forward<InputFunctor>(input), 1);
-                if(p.second) return p;
+                if(Abortable && p.second)
+                {
+                    // Note: Throws away progress already made traversing the tree
+                    return p;
+                }
                 tmpnode = tree.get(p.first ? tmpnode.GetBranch1() : tmpnode.GetBranch0());
             }
             return {tmpnode.GetValue(), false};
@@ -380,7 +396,7 @@ namespace gunzip_ns
             return false;
         }
         template<typename WindowFunctor>
-        static inline bool outputcopy(WindowFunctor&& outputcopy, unsigned short& length, unsigned offset)
+        static inline bool outputcopy(WindowFunctor&& outputcopy, unsigned short length, unsigned offset)
         {
             outputcopy(length, offset);
             return false;
@@ -408,12 +424,12 @@ namespace gunzip_ns
  *
  *   Input abortable    Output abortable   Resumable     Value
  *                no                  no          no     0
- *                no                 yes          no     1
- *               yes                  no          no     2
+ *               yes                  no          no     1
+ *                no                 yes          no     2
  *               yes                 yes          no     3
  *                                                       4 = invalid
- *                no                 yes         yes     5
- *               yes                  no         yes     6
+ *               yes                  no         yes     5
+ *                no                 yes         yes     6
  *               yes                 yes         yes     7
  */
 template<unsigned char Abortable,
@@ -434,22 +450,20 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
     // in order to make them inlined in the function structure, and breakable/resumable.
 
     // Bit-by-bit input routine
-    #define GetBits_F(numbits, param, o) do { \
+    #define DummyGetBits(numbits) do { \
+        if(state.template GetBits<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), numbits).second && (Abortable&1)) \
+            return 1; } while(0)
+
+    #define GetBits(numbits, target) \
         auto p = state.template GetBits<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), numbits); \
-        if(p.second) return 1; \
-        o(param, p.first); } while(0)
-
-    #define assign(target, value) target = (value)
-    #define GetBits(numbits, target) GetBits_F(numbits, target, assign)
-
-    #define ignore(target, value) do {} while(0)
-    #define DummyGetBits(numbits) GetBits_F(numbits, target, ignore)
+        if((Abortable & 1) && p.second) return 1; \
+        target = p.first
 
     // Huffman tree read routine.
-    #define HuffRead(tree, which, target) do { \
-        auto p = state.HuffReadT<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), tree, which); \
-        if(p.second) return 1; \
-        target = p.first; } while(0)
+    #define HuffRead(tree, which, target) \
+        auto p = state.HuffRead<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), tree, which); \
+        if((Abortable & 1) && p.second) return 1; \
+        target = p.first
 
     #define Fail_If(condition) do { \
         /*assert(!(condition));*/ \
@@ -457,20 +471,17 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
     } while(0)
 
     // Read stream header
-    unsigned short header;
-    GetBits(16, header);
+    GetBits(16, unsigned short header);
     // ^ Read deflate header: method[4] ; winsize[4] ; checksum[8]
     if(header == 0x8B1F) // Is it actually a gzip header?
     {
-        GetBits(8, header); Fail_If(header != 8); // Format identifier should be 8
-        GetBits(8, header);                       // Get flags
-        DummyGetBits(48); // MTIME (3 of 4); MTIME(1 of 4), XFL and OS
-        if(header&4) // Skip extra fields as indicated by FEXTRA
-            { unsigned q; GetBits(16, q);
-              while(q--) { DummyGetBits(8); } }
-        if(header&8)  for(;;) { bool q; GetBits(8, q); if(!q) break; } // NAME: Skip filename if FNAME was present
-        if(header&16) for(;;) { bool q; GetBits(8, q); if(!q) break; } // COMMENT: Skip comment if FCOMMENT was present
-        if(header&2)  { DummyGetBits(16); }      // HCRC: Skip FCRC if was present
+        // Get format identifier, flags, MTIME, XFL and OS
+        GetBits(64, header); Fail_If((header & 0xFF) != 8); // Format identifier should be 8
+        if(header&0x0400) // Skip extra fields as indicated by FEXTRA
+            { GetBits(16, unsigned q); DummyGetBits(8*q); }
+        if(header&0x0800) for(;;) { GetBits(8, bool q); if(!q) break; } // NAME: Skip filename if FNAME was present
+        if(header&0x1000) for(;;) { GetBits(8, bool q); if(!q) break; } // COMMENT: Skip comment if FCOMMENT was present
+        if(header&0x0200) { DummyGetBits(16); }      // HCRC: Skip FCRC if was present
         outputcopy(0, 32768u); // GZIP always uses 32k window
     }
     else // No. Deflate header?
@@ -480,29 +491,24 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
     }
 
     // Read compressed blocks
-    for(header=0; !(header & 1); )
+    for(;;)
     {
         GetBits(3, header);
         if(!(header & 4)) // Fixed block
         {
             if(header < 2) // Copy stored block data
             {
-                unsigned short a = state.BitCount%8;
-                DummyGetBits(a); // Go to byte boundary (discard a few bits)
-                GetBits(16, a);
-                { unsigned short b; GetBits(16, b); Fail_If((a^b) != 0xFFFF); }
-                // Note: It is valid for "a" to be 0 here.
+                DummyGetBits(state.BitCount%8); // Go to byte boundary (discard a few bits)
+                GetBits(32, unsigned a);
+                Fail_If(((a ^ (a >> 16)) & 0xFFFF) != 0xFFFF);
+                // Note: It is valid for (lower 16 bits of) "a" to be 0 here.
                 // It is sometimes used for aligning the stream to byte boundary.
-                while(a--)
+                while(a-- & 0xFFFF)
                 {
-                    unsigned char octet;
-                    GetBits(8, octet);
-                    while(OutputHelper<Abortable&2>::output(output, octet))
-                    {
-                        return 2;
-                    }
+                    GetBits(8, unsigned char octet);
+                    while(OutputHelper<Abortable&2>::output(output, octet)) { return 2; }
                 }
-                continue;
+                goto skipdef;
             }
             if(state.cur_table != &state.tables_fixed)
             {
@@ -525,38 +531,31 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             GetBits(14, nlen_ndist_ncode);
             #define nlen  (((nlen_ndist_ncode >> 0u) & 0x1Fu) + 257u) // 257..288
             #define ndist (((nlen_ndist_ncode >> 5u) & 0x1Fu) + 1u)   // 1..32
-            #define ncode ( (nlen_ndist_ncode >>10u)          + 4u)   // 4..19
             assert(nlen+ndist <= 288+32);
 
-            state.Lengths.template WSet<32*4>(0, 0); // 19 needed, but round to nice unit
+            {state.Lengths.template WSet<32*4>(0, 0); // 19 needed, but round to nice unit
+            unsigned char ncode = ((nlen_ndist_ncode >> 10u) + 4u); // 4..19
+            unsigned long long lenlens; GetBits(ncode*3, lenlens);  // Max: 19*3 = 57 bits
             for(unsigned a=0; a < ncode; ++a)
-            {
-                unsigned b; GetBits(3, b);
-                state.Lengths.QSet(a<3 ? (a+16) : ((a%2) ? (1-a/2)&7 : (6+a/2)), b);
-            }
-            // ^ 19 * 3 = 57 bits are used
+                state.Lengths.QSet(a<3 ? (a+16) : ((a%2) ? (1-a/2)&7 : (6+a/2)), ((lenlens >> (a*3)) & 7));}
             state.tables_dyn.Create(0, 19, state.Lengths, 0); // length-lengths
-            assert(state.tables_dyn.used <= PoolSize);
+
             state.Lengths = {}; // clear at least (nlen+ndist) nibbles; easiest to clear it all
             //state.Lengths.Set<(288+32)*4,true>(0,0);
-            unsigned short code = 0;
             unsigned char lencode = 0;
-            while(code < nlen+ndist)
+            for(unsigned short code = 0; code < nlen+ndist; ) // nlen+ndist is 258..320
             {
-                unsigned char q;
-                HuffRead(state.tables_dyn, 0, q); // 0-18
-                assert(q < 19);
+                HuffRead(state.tables_dyn, 0, unsigned char what); // 0-18
+                assert(what < 19);
 
-                if(!(q & 16))    { lencode = q * 0x11u; q = 1; } // 1 times (q < 16) (use q, set prev)
-                else if(q < 17)  { GetBits(2, q); q += 3;  lencode = (lencode >> 4) * 0x11u; } // 3..6 (use prev)
-                else if(q == 17) { GetBits(3, q); q += 3;  lencode &= 0xF0; }                        // 3..10   (use 0)
-                else             { GetBits(7, q); q += 11; lencode &= 0xF0; }                        // 11..138 (use 0)
-                assert(q > 0);
+                if(!(what & 16))    { lencode = what * 0x11u;           what = 0x01; } // 1 times (what < 16) (use what, set prev)
+                else if(what < 17)  { lencode = (lencode >> 4) * 0x11u; what = 0x23; } // 3..6 (use prev)
+                else if(what == 17) { lencode &= 0xF0;                  what = 0x33; } // 3..10   (use 0)
+                else                { lencode &= 0xF0;                  what = 0x7B; } // 11..138 (use 0)
+                {GetBits(what >> 4, unsigned char num); num += (what & 0xF);
 
-                unsigned c = code, e = c + q, l = lencode & 0xF;
-                Fail_If(e > (nlen+ndist));
-                while(c < e) { state.Lengths.QSet(c++, l); }
-                code = e;
+                Fail_If((code+num) > (nlen+ndist));
+                while(num--) { state.Lengths.QSet(code++, lencode & 0xF); }}
             }
             state.tables_dyn.Create(0, nlen,  state.Lengths, 0);
             state.tables_dyn.Create(1, ndist, state.Lengths, nlen);
@@ -568,46 +567,34 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             state.cur_table = &state.tables_dyn;
             #undef nlen
             #undef ndist
-            #undef ncode
         }
         // Do actual deflating.
         for(;;)
         {
-            unsigned short code;
-            HuffRead(*state.cur_table, 0, code);
+            HuffRead(*state.cur_table, 0, unsigned short code); // 0..287
             if(!(code & -256)) // 0..255: literal byte
             {
-                while(OutputHelper<Abortable&2>::output(output, code))
-                {
-                    return 2;
-                }
+                while(OutputHelper<Abortable&2>::output(output, code)) { return 2; }
             }
             else if(!(code & 0xFF)) break; // 256=end
-            else // 257..285: length code for backwards reference
+            else // 257..287: length code for backwards reference
             {
-                unsigned short a = code-257, length;
-                GetBits(unsigned((a >= 8 && a<28) ? (a/4-1) : 0), length);
-                length += 3 + (a > 28 ? 0 : ((a >= 8) ? ((a%4+4) << (a/4-1)) - (a==28) : a));
-
-                HuffRead(*state.cur_table, 1, a); // Read distance code (0..31)
-
-                unsigned dbits = unsigned(a>=4 ? a/2-1 : 0);
-                unsigned offset;
-                GetBits(dbits, offset); offset += (1 + (a>=4 ? ((2+a%2) << (a/2-1)) : a));
-                while(OutputHelper<Abortable&2>::outputcopy(outputcopy, length, offset))
-                {
-                    return 3;
-                }
+                GetBits(unsigned((code>=265 && code<285) ? ((code-257)/4-1) : 0), unsigned short length);
+                {HuffRead(*state.cur_table, 1, unsigned char distcode); // Read distance code (0..31)
+                {GetBits(/*dbits*/unsigned(distcode>=4 ? distcode/2-1 : 0), unsigned short offset);
+                while(OutputHelper<Abortable&2>::outputcopy(
+                    outputcopy,
+                    length + 3 + (code > 285 ? 0 : ((code >= 265) ? (((code-257)%4+4) << ((code-257)/4-1)) - (code==285) : (code-257))),
+                    offset + (1 + (distcode>=4 ? ((2+distcode%2) << (distcode/2-1)) : distcode)))) { return 3; }}}
             }
         }
+skipdef:if(header & 1) break; // last block flag
     }
     // Note: after this, may come a checksum, and a trailer. Ignoring them.
-    #undef GetBits_F
     #undef GetBits
     #undef DummyGetBits
-    #undef assign
-    #undef ignore
     #undef Fail_If
+    #undef HuffRead
     return 0;
 }
 
@@ -617,6 +604,16 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
 #define DeflIsRandomAccessIterator (std::is_convertible<decltype(*typename std::decay<RandomAccessIterator>::type()), int>::value)
 #define DeflIsForwardIterator      (std::is_convertible<decltype(*typename std::decay<ForwardIterator>::type()), int>::value)
 #define DeflIsInputIterator        (std::is_convertible<decltype(*typename std::decay<InputIterator>::type()), int>::value)
+#define DeflIsOutputIterator       true /* TODO: create rule */
+
+#define DeflInputAbortable_InputFunctor \
+                                 (1* !(std::is_same<typename std::result_of<InputFunctor()>, unsigned char>::value \
+                                    || std::is_same<typename std::result_of<InputFunctor()>,   signed char>::value \
+                                    || std::is_same<typename std::result_of<InputFunctor()>,          char>::value))
+#define DeflOutputAbortable_OutputFunctor \
+                                 (2* std::is_same<typename std::result_of<OutputFunctor(int)>::type, bool>::value)
+#define DeflOutputAbortable_WindowFunctor \
+                                 (2* std::is_convertible<typename std::result_of<WindowFunctor(int,int)>::type, int>::value)
 
 template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
 typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindowFunctor, int>::type
@@ -624,12 +621,9 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindo
 {
     gunzip_ns::DeflateState<false> state;
 
-    constexpr bool OutputAbortable = std::is_same<typename std::result_of<OutputFunctor(int)>::type, bool>::value
-                                  && std::is_convertible<typename std::result_of<WindowFunctor(int,int)>::type, int>::value;
-    constexpr bool InputAbortable  = !(std::is_same<typename std::result_of<InputFunctor()>, unsigned char>::value
-                                    || std::is_same<typename std::result_of<InputFunctor()>,   signed char>::value
-                                    || std::is_same<typename std::result_of<InputFunctor()>,          char>::value);
-    constexpr unsigned char Abortable = (InputAbortable*1 + OutputAbortable*2);
+    // For output to be abortable, both the output functor and window functor must have return types.
+    constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor
+                                      | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
 
     return Deflate<Abortable>(state, std::forward<InputFunctor>(input),
                                      std::forward<OutputFunctor>(output),
@@ -640,13 +634,12 @@ template<typename InputFunctor, typename OutputFunctor>
 typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor, int>::type
     Deflate(InputFunctor&& input, OutputFunctor&& output)
 {
+    // Using a library-supplied output window. OutputFunctor will be wrapped.
+
     gunzip_ns::DeflateState<true> state;
 
-    constexpr bool OutputAbortable = std::is_same<typename std::result_of<OutputFunctor(int)>::type, bool>::value;
-    constexpr bool InputAbortable  = !(std::is_same<typename std::result_of<InputFunctor()>, unsigned char>::value
-                                    || std::is_same<typename std::result_of<InputFunctor()>,   signed char>::value
-                                    || std::is_same<typename std::result_of<InputFunctor()>,          char>::value);
-    constexpr unsigned char Abortable = (InputAbortable*1 + OutputAbortable*2);
+    constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor
+                                      | DeflOutputAbortable_OutputFunctor;
 
     auto Put = [&](unsigned char l)
     {
@@ -674,12 +667,9 @@ template<typename InputFunctor, typename RandomAccessIterator>
 typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::type
     Deflate(InputFunctor&& input, RandomAccessIterator&& target)
 {
-    constexpr bool OutputAbortable = false;
-    constexpr bool InputAbortable  = !(std::is_same<typename std::result_of<InputFunctor()>, unsigned char>::value
-                                    || std::is_same<typename std::result_of<InputFunctor()>,   signed char>::value
-                                    || std::is_same<typename std::result_of<InputFunctor()>,          char>::value);
-    constexpr unsigned char Abortable = (InputAbortable*1 + OutputAbortable*2);
+    constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor; // Output is not abortable
 
+    // Using a window functor, not a separate window.
     return Deflate<Abortable> (std::forward<InputFunctor>(input),
         [&](unsigned char l) { *target++ = l; },
         [&](unsigned short length, unsigned offs)
@@ -694,6 +684,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::
     Deflate(InputFunctor&& input, RandomAccessIterator&& target, std::size_t target_limit)
 {
     std::size_t target_size = 0;
+    // Using a window functor, not a separate window.
     return Deflate(std::forward<InputFunctor>(input),
         [&](unsigned char l)
         {
@@ -717,6 +708,7 @@ template<typename InputFunctor, typename RandomAccessIterator>
 typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::type
     Deflate(InputFunctor&& input, RandomAccessIterator&& output_begin, RandomAccessIterator&& output_end)
 {
+    // Using a window functor, not a separate window.
     return Deflate(std::forward<InputFunctor>(input),
         [&](unsigned char l)
         {
@@ -737,7 +729,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::
 }
 
 template<typename ForwardIterator, typename OutputIterator>
-typename std::enable_if<DeflIsForwardIterator, int>::type
+typename std::enable_if<DeflIsForwardIterator && DeflIsOutputIterator, int>::type
     Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output)
 {
     return Deflate([&]()                { return begin==end ? -1 : *begin++; },
@@ -790,3 +782,7 @@ typename std::enable_if<DeflIsForwardIterator && DeflIsRandomAccessIterator, int
 #undef DeflIsRandomAccessIterator
 #undef DeflIsForwardIterator
 #undef DeflIsInputIterator
+#undef DeflIsOutputIterator
+#undef DeflInputAbortable_InputFunctor
+#undef DeflOutputAbortable_OutputFunctor
+#undef DeflOutputAbortable_WindowFunctor

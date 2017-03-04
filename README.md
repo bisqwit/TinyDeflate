@@ -19,9 +19,9 @@ In addition, if you neither decompress into a raw memory area nor supply your ow
 ## Unrequirements
 
 * No dynamic memory is allocated under any circumstances, unless your user-supplied functors do it.
-* The only #include is assert.h, for assert(). No other standard library function, template, or typedef is used.
+* Aside from assert() in assert.h and some template metaprogramming tools in type_traits, no standard library functions are used.
 * There are no constant arrays or global variables.
-* The header can be used in applications that are compiled without exception or rtti support.
+* No exceptions or runtime type identification is required.
 
 ## Rationale
 
