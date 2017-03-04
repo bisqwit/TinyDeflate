@@ -443,9 +443,9 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
 {
     // Return values: -1 = error in input data
     //                 0 = decompression complete
-    //                 1 = input()      returned non-byte
-    //                 2 = outputcopy() returned nonzero (only if Abortable >= 1)
-    //                 3 = output()     returned true (only if Abortable >= 1)
+    //                 1 = input()      returned non-byte (only if Abortable&1)
+    //                 2 = outputcopy() returned nonzero (only if Abortable&2)
+    //                 3 = output()     returned true (only if Abortable&2)
     using namespace gunzip_ns;
 
     // The following routines are macros rather than e.g. lambda functions,
@@ -453,18 +453,18 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
 
     // Bit-by-bit input routine
     #define DummyGetBits(numbits) do { \
-        auto p = state.template GetBits<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), numbits); \
+        auto p = state.template GetBits<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), numbits); \
         if((Abortable & 1) && !~p) return 1; \
     } while(0)
 
     #define GetBits(numbits, target) \
-        auto p = state.template GetBits<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), numbits); \
+        auto p = state.template GetBits<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), numbits); \
         if((Abortable & 1) && !~p) return 1; \
         target = p
 
     // Huffman tree read routine.
     #define HuffRead(tree, which, target) \
-        auto p = state.HuffRead<InputFunctor,Abortable&1>(std::forward<InputFunctor>(input), tree, which); \
+        auto p = state.HuffRead<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), tree, which); \
         if((Abortable & 1) && !~p) return 1; \
         target = p
 
@@ -508,7 +508,7 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             {state.Lengths.template WSet<32*4>(0, 0); // 19 needed, but round to nice unit
             std::uint_least8_t ncode = ((nlen_ndist_ncode >> 10u) + 4u); // 4..19
             std::uint_fast64_t lenlens; GetBits(ncode*3, lenlens);  // Max: 19*3 = 57 bits
-            for(unsigned a=0; a < ncode; ++a)
+            for(unsigned a=0; a<ncode; ++a)
                 state.Lengths.QSet(order(a), ((lenlens >> (a*3)) & 7));}
             state.tables_dyn.Create(0, 19, state.Lengths, 0); // length-lengths
 
@@ -551,7 +551,7 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
                 while(a-- & 0xFFFF)
                 {
                     GetBits(8, unsigned char octet);
-                    while(OutputHelper<Abortable&2>::output(output, octet)) { return 2; }
+                    while(OutputHelper<bool(Abortable&2)>::output(output, octet)) { return 2; }
                 }
                 goto skipdef;
             }
@@ -575,18 +575,15 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             HuffRead(*state.cur_table, 0, std::uint_least16_t lencode); // 0..287
             if(!(lencode & -256)) // 0..255: literal byte
             {
-                while(OutputHelper<Abortable&2>::output(output, lencode)) { return 2; }
+                while(OutputHelper<bool(Abortable&2)>::output(output, lencode)) { return 2; }
             }
             else if(!(lencode & 0xFF)) break; // 256=end
             else // 257..287: length code for backwards reference
             {
-                GetBits(lbits(lencode), std::uint_least16_t length);
+                GetBits(lbits(lencode), std::uint_least16_t length); length += lbase(lencode);
                 {HuffRead(*state.cur_table, 1, std::uint_least8_t distcode); // Read distance code (0..31)
-                {GetBits(dbits(distcode), std::uint_least32_t offset);
-                while(OutputHelper<Abortable&2>::outputcopy(
-                    outputcopy,
-                    length + lbase(lencode),
-                    offset + dbase(distcode))) { return 3; }}}
+                {GetBits(dbits(distcode), std::uint_least32_t offset); offset += dbase(distcode);
+                while(OutputHelper<bool(Abortable&2)>::outputcopy(outputcopy,length,offset)) { return 3; }}}
             }
         }
 skipdef:if(header & 1) break; // last block flag
@@ -599,11 +596,11 @@ skipdef:if(header & 1) break; // last block flag
     return 0;
 }
 
-#define DeflIsInputFunctor  (std::is_convertible<std::result_of_t<InputFunctor()>,int>::value)
-#define DeflIsOutputFunctor        (std::is_same<std::result_of_t<OutputFunctor(int)>,void>::value \
-                                 || std::is_same<std::result_of_t<OutputFunctor(int)>,bool>::value)
-#define DeflIsWindowFunctor        (std::is_convertible<std::result_of_t<WindowFunctor(int,int)>,int>::value \
-                                        || std::is_same<std::result_of_t<WindowFunctor(int,int)>,void>::value)
+#define DeflIsInputFunctor  (std::is_convertible<std::result_of_t<std::decay_t<InputFunctor>()>,int>::value)
+#define DeflIsOutputFunctor        (std::is_same<std::result_of_t<std::decay_t<OutputFunctor>(int)>,void>::value \
+                                 || std::is_convertible<std::result_of_t<std::decay_t<OutputFunctor>(int)>,bool>::value)
+#define DeflIsWindowFunctor        (std::is_convertible<std::result_of_t<std::decay_t<WindowFunctor>(int,int)>,int>::value \
+                                        || std::is_same<std::result_of_t<std::decay_t<WindowFunctor>(int,int)>,void>::value)
 
 #define DeflIsForwardIterator   (std::is_convertible<typename std::iterator_traits<std::decay_t<ForwardIterator>>::value_type, unsigned char>::value \
                                     && (std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::forward_iterator_tag>::value \
@@ -624,6 +621,9 @@ skipdef:if(header & 1) break; // last block flag
                                     && (std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::output_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::forward_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::bidirectional_iterator_tag>::value))
+
+#define DeflIsSizeType           (std::is_convertible<std::decay_t<SizeType>, std::size_t>::value \
+                                  && !std::is_pointer<std::decay_t<SizeType>>::value)
 
 #define DeflInputAbortable_InputFunctor \
                                  (1* !(std::is_same<std::decay_t<std::result_of_t<InputFunctor()>>, unsigned char>::value \
@@ -676,7 +676,7 @@ std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor, int>
             for(; length>0; --length)
             {
                 unsigned char byte = state.Window.Data[(state.Window.Head - offs) & 32767u];
-                if(gunzip_ns::OutputHelper<Abortable&2>::output(Put, byte))
+                if(gunzip_ns::OutputHelper<bool(Abortable&2)>::output(Put, byte))
                     break;
             }
             return length;
@@ -711,26 +711,26 @@ std::enable_if_t<DeflIsInputFunctor && DeflIsOutputIterator, int>
                                [&](unsigned char l) { *target++ = l; });
 }
 
-template<typename InputFunctor, typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>
-    Deflate(InputFunctor&& input, RandomAccessIterator&& target, std::size_t target_limit)
+template<typename InputFunctor, typename RandomAccessIterator, typename SizeType>
+std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeType, int>
+    Deflate(InputFunctor&& input, RandomAccessIterator&& target, SizeType&& target_limit)
 {
-    std::size_t target_size = 0;
+    typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::difference_type used{}, cap=target_limit;
     // Using a window functor, not a separate window.
     return Deflate(std::forward<InputFunctor>(input),
         [&](unsigned char l)
         {
-            if(target_size >= target_limit) return true;
-            target[target_size++] = l;
+            if(used>=cap) return true;
+            target[used++] = l;
             return false;
         },
         [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
             // length=0 means that offs is the size of the window.
-            for(; length > 0; ++target_size, --length)
+            for(; length > 0; ++used, --length)
             {
-                if(target_size >= target_limit) break;
-                target[target_size] = target[target_size - offs];
+                if(used>=cap) break;
+                target[used] = target[used-offs];
             }
             return length;
         });
@@ -777,11 +777,12 @@ std::enable_if_t<DeflIsForwardIterator, int>
                    std::forward<Args>(args)...);
 }
 
-template<typename ForwardIterator, typename... Args>
-std::enable_if_t<DeflIsForwardIterator, int>
-    Deflate(ForwardIterator&& begin, std::size_t length,  Args&&... args)
+template<typename ForwardIterator, typename SizeType, typename... Args>
+std::enable_if_t<DeflIsForwardIterator && DeflIsSizeType, int>
+    Deflate(ForwardIterator&& begin, SizeType&& length, Args&&... args)
 {
-    return Deflate([&]() { return length ? --length, *begin++ : -1; },
+    typename std::iterator_traits<std::decay_t<ForwardIterator>>::difference_type remain(length);
+    return Deflate([&]() { return remain ? --remain, *begin++ : -1; },
                    std::forward<Args>(args)...);
 }
 
@@ -793,6 +794,7 @@ std::enable_if_t<DeflIsForwardIterator, int>
 #undef DeflIsForwardIterator
 #undef DeflIsInputIterator
 #undef DeflIsOutputIterator
+#undef DeflIsSizeType
 #undef DeflInputAbortable_InputFunctor
 #undef DeflOutputAbortable_OutputFunctor
 #undef DeflOutputAbortable_WindowFunctor
