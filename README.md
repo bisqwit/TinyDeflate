@@ -1,6 +1,6 @@
 # TinyDeflate
 
-A deflate/gzip decompressor, as a C++11 template function,
+A deflate/gzip decompressor, as a C++14 template function,
 that requires minimal amount of memory to work.
 
 ## Memory usage
