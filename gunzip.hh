@@ -379,7 +379,7 @@ namespace gunzip_ns
     inline unsigned lbase(unsigned lencode)  { return (lencode > 285 ? 3 : ((lencode >= 265) ? (((lencode-257)%4+4) << ((lencode-257)/4-1)) + (lencode==285 ? 2 : 3) : (lencode-254))); }
 #endif
     inline unsigned dbits(unsigned distcode) { return distcode>=4 ? distcode/2-1 : 0; }
-    inline unsigned lbits(unsigned lencode)  { return ((lencode>=265 && lencode<285) ? ((lencode-257)/4-1) : 0); }
+    inline unsigned lbits(unsigned lencode)  { return ((lencode>=265 && lencode<285) ? ((lencode-265)/4+1) : 0); }
     inline unsigned order(unsigned index)    { return index<3 ? (index+16) : ((index%2) ? (1-index/2)&7 : (6+index/2)); }
 
     template<>
@@ -596,7 +596,8 @@ skipdef:if(header & 1) break; // last block flag
     return 0;
 }
 
-#define DeflIsInputFunctor  (std::is_convertible<std::result_of_t<std::decay_t<InputFunctor>()>,int>::value)
+#define DeflIsInputFunctor  (std::is_convertible<std::result_of_t<std::decay_t<InputFunctor>()>,int>::value /*\
+                             && !std::is_pointer<std::decay_t<InputFunctor>>::value*/)
 #define DeflIsOutputFunctor        (std::is_same<std::result_of_t<std::decay_t<OutputFunctor>(int)>,void>::value \
                                  || std::is_convertible<std::result_of_t<std::decay_t<OutputFunctor>(int)>,bool>::value)
 #define DeflIsWindowFunctor        (std::is_convertible<std::result_of_t<std::decay_t<WindowFunctor>(int,int)>,int>::value \
@@ -607,10 +608,7 @@ skipdef:if(header & 1) break; // last block flag
                                      || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::bidirectional_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::random_access_iterator_tag>::value))
 
-#define DeflIsInputIterator     (std::is_convertible<typename std::iterator_traits<std::decay_t<InputIterator>>::value_type, unsigned char>::value \
-                                    && (std::is_same<typename std::iterator_traits<std::decay_t<InputIterator>>::iterator_category, std::input_iterator_tag>::value \
-                                     || std::is_same<typename std::iterator_traits<std::decay_t<InputIterator>>::iterator_category, std::forward_iterator_tag>::value \
-                                     || std::is_same<typename std::iterator_traits<std::decay_t<InputIterator>>::iterator_category, std::bidirectional_iterator_tag>::value))
+#define DeflIsInputIterator     (std::is_convertible<typename std::iterator_traits<std::decay_t<InputIterator>>::value_type, unsigned char>::value)
 
 #define DeflIsRandomAccessIterator (std::is_convertible<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::value_type, unsigned char>::value \
                                   && !std::is_const<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::reference>::value \
@@ -618,6 +616,7 @@ skipdef:if(header & 1) break; // last block flag
 
 #define DeflIsOutputIterator    (std::is_convertible<typename std::iterator_traits<std::decay_t<OutputIterator>>::value_type, unsigned char>::value \
                                    && !std::is_const<typename std::iterator_traits<std::decay_t<OutputIterator>>::reference>::value \
+                                   && !std::is_pointer<std::decay_t<OutputIterator>>::value \
                                     && (std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::output_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::forward_iterator_tag>::value \
                                      || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::bidirectional_iterator_tag>::value))
@@ -689,10 +688,8 @@ template<typename InputFunctor, typename RandomAccessIterator>
 std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>
     Deflate(InputFunctor&& input, RandomAccessIterator&& target)
 {
-    constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor; // Output is not abortable
-
-    return Deflate<Abortable> (std::forward<InputFunctor>(input),
-        [&](unsigned char l) { *target++ = l; },
+    return Deflate(std::forward<InputFunctor>(input),
+        [&](unsigned char l) { *target = l; ++target; },
         [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
             // length=0 means that offs is the size of the window.
@@ -705,10 +702,8 @@ template<typename InputFunctor, typename OutputIterator>
 std::enable_if_t<DeflIsInputFunctor && DeflIsOutputIterator, int>
     Deflate(InputFunctor&& input, OutputIterator&& target)
 {
-    constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor; // Output is not abortable
-
-    return Deflate<Abortable> (std::forward<InputFunctor>(input),
-                               [&](unsigned char l) { *target++ = l; });
+    return Deflate(std::forward<InputFunctor>(input),
+                   [&](unsigned char l) { *target = l; ++target; });
 }
 
 template<typename InputFunctor, typename RandomAccessIterator, typename SizeType>
@@ -720,8 +715,8 @@ std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeT
     return Deflate(std::forward<InputFunctor>(input),
         [&](unsigned char l)
         {
-            if(used>=cap) return true;
-            target[used++] = l;
+            if(used >= cap) return true;
+            target[used] = l; ++used;
             return false;
         },
         [&](std::uint_least16_t length, std::uint_fast32_t offs)
@@ -729,8 +724,8 @@ std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeT
             // length=0 means that offs is the size of the window.
             for(; length > 0; ++used, --length)
             {
-                if(used>=cap) break;
-                target[used] = target[used-offs];
+                if(used >= cap) break;
+                target[used] = target[used - offs];
             }
             return length;
         });
@@ -745,7 +740,7 @@ std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>
         [&](unsigned char l)
         {
             if(target_begin == target_end) return true;
-            *target_begin++ = l;
+            *target_begin = l; ++target_begin;
             return false;
         },
         [&](std::uint_least16_t length, std::uint_fast32_t offs)
@@ -765,7 +760,7 @@ template<typename InputIterator, typename... Args>
 std::enable_if_t<DeflIsInputIterator, int>
     Deflate(InputIterator&& input, Args&&... args)
 {
-    return Deflate([&]() { return *input++; },
+    return Deflate([&]() { auto r = *input; ++input; return r; },
                    std::forward<Args>(args)...);
 }
 
@@ -773,7 +768,8 @@ template<typename ForwardIterator, typename... Args>
 std::enable_if_t<DeflIsForwardIterator, int>
     Deflate(ForwardIterator&& begin, ForwardIterator&& end,  Args&&... args)
 {
-    return Deflate([&]()                { return begin==end ? -1 : *begin++; },
+    return Deflate([&]() -> std::common_type_t<int, decltype(*begin)>
+                   { if(begin==end) { return -1; } auto r = *begin; ++begin; return r; },
                    std::forward<Args>(args)...);
 }
 
@@ -782,7 +778,8 @@ std::enable_if_t<DeflIsForwardIterator && DeflIsSizeType, int>
     Deflate(ForwardIterator&& begin, SizeType&& length, Args&&... args)
 {
     typename std::iterator_traits<std::decay_t<ForwardIterator>>::difference_type remain(length);
-    return Deflate([&]() { return remain ? --remain, *begin++ : -1; },
+    return Deflate([&]() -> std::common_type_t<int, decltype(*begin)>
+                   { if(!remain) { return -1; } --remain; auto r = *begin; ++begin; return r; },
                    std::forward<Args>(args)...);
 }
 
