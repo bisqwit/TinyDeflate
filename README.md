@@ -154,9 +154,16 @@ If either the window function returns `void`, or the output functor does not ret
 10) If `length` bytes have been read from `begin` and the decompression is not yet complete, the decompression aborts with return value 1.
 
 Note that some of these definitions may be ambiguous.
-If you hit a compiler error trying e.g. to instantiate
-a call with three iterator parameters,
-choose a different call method.
+If you hit a compiler error, choose a different call method.
+To help distinguish between (`InputIterator`,`RandomAccessIterator`,`RandomAccessIterator`)
+and (`ForwardIterator`,`ForwardIterator`,`OutputIterator`), make sure the input iterators
+are _const_.
+
+Note: If you do multiple decompression calls in your program in different spots,
+it may be wise to make sure they all use the same type of parameters,
+to avoid having to instantiate multiple copies of `Deflate()`.
+In the worst case, you can use `std::function` to wrap your calls
+into a common interface. Check out this video for more about this topic: https://www.youtube.com/watch?v=rUB5Hlm9AaQ
 
 ## Requirements
 
