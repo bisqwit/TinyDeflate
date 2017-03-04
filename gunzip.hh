@@ -26,6 +26,7 @@
 #include <utility>     // std::forward
 #include <cstdint>     // integer sizes
 #include <type_traits>
+#include <iterator>
 
 #if !1 //Documentation purposes only; the actual prototypes are littered with std::enable_ifs.
 // Deflate(): This is the public method declared (later) in this file.
@@ -58,43 +59,7 @@
 template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
 int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy);
 
-// Alternative: Same as above, but window-management is handled automatically.
-//              This adds 32770 bytes of automatic variables for the look-behind window.
-template<typename InputFunctor, typename OutputFunctor>
-int Deflate(InputFunctor&& input, OutputFunctor&& output);
-
-// Alternative: Deflate-decompress into a memory region.
-// In this case, a separate window will not be allocated.
-template<typename InputFunctor, typename RandomAccessIterator>
-int Deflate(InputFunctor&& input, RandomAccessIterator&& target);
-
-// Same as above, but with a length limit. Decompression aborts if the length limit is hit.
-template<typename InputFunctor, typename RandomAccessIterator>
-int Deflate(InputFunctor&& input, RandomAccessIterator&& target, std::size_t target_limit);
-
-// Same as above, but with the length expressed as an iterator pair.
-template<typename InputFunctor, typename RandomAccessIterator>
-int Deflate(InputFunctor&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end);
-
-// Alternative: Use a pair of forward iterators to denote input range, and an output iterator
-template<typename ForwardIterator, typename OutputIterator>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output);
-
-// Alternative: Use a pair of forward iterators to denote input range, and an output functor
-template<typename ForwardIterator, typename OutputFunctor>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output);
-
-// Alternative: Use a pair of forward iterators to denote input range, and an output functor, and a window functor
-template<typename ForwardIterator, typename OutputFunctor, typename WindowFunctor>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output, WindowFunctor&& outputcopy);
-
-// Alternative: Use an input iterator and an output iterator.
-template<typename InputIterator, typename OutputIterator>
-void Deflate(InputIterator&& input, OutputIterator&& output);
-
-// Alterantive: Iterator pairs for both input and output. A window is allocated.
-template<typename ForwardIterator, typename RandomAccessIterator>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end);
+// Check README.md for the full list of versions of Deflate() available.
 
 #endif
 
@@ -449,7 +414,7 @@ namespace gunzip_ns
             return output(byte);
         }
         template<typename WindowFunctor>
-        static inline bool outputcopy(WindowFunctor&& outputcopy, std::uint_least16_t& length, std::uint_fast16_t offset)
+        static inline bool outputcopy(WindowFunctor&& outputcopy, std::uint_least16_t& length, std::uint_fast32_t offset)
         {
             length = outputcopy(length, offset);
             return length != 0;
@@ -617,7 +582,7 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             {
                 GetBits(lbits(lencode), std::uint_least16_t length);
                 {HuffRead(*state.cur_table, 1, std::uint_least8_t distcode); // Read distance code (0..31)
-                {GetBits(dbits(distcode), std::uint_least16_t offset);
+                {GetBits(dbits(distcode), std::uint_least32_t offset);
                 while(OutputHelper<Abortable&2>::outputcopy(
                     outputcopy,
                     length + lbase(lencode),
@@ -637,20 +602,35 @@ skipdef:if(header & 1) break; // last block flag
 #define DeflIsInputFunctor         (std::is_convertible<typename std::result_of<InputFunctor()>::type,int>::value)
 #define DeflIsOutputFunctor        (std::is_same<typename std::result_of<OutputFunctor(int)>::type,void>::value|1)
 #define DeflIsWindowFunctor        (std::is_same<typename std::result_of<WindowFunctor(int,int)>::type,void>::value|1)
-#define DeflIsRandomAccessIterator (std::is_convertible<decltype(*typename std::decay<RandomAccessIterator>::type()), int>::value)
-#define DeflIsForwardIterator      (std::is_convertible<decltype(*typename std::decay<ForwardIterator>::type()), int>::value)
-#define DeflIsInputIterator        (std::is_convertible<decltype(*typename std::decay<InputIterator>::type()), int>::value)
-#define DeflIsOutputIterator       true /* TODO: create rule */
+
+#define DeflIsForwardIterator      (std::is_convertible<decltype(*typename std::decay<ForwardIterator>::type()), int>::value \
+                                    && (std::is_same<typename std::iterator_traits<typename std::decay<ForwardIterator>::type>::iterator_category, std::forward_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<typename std::decay<ForwardIterator>::type>::iterator_category, std::bidirectional_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<typename std::decay<ForwardIterator>::type>::iterator_category, std::random_access_iterator_tag>::value))
+
+#define DeflIsInputIterator        (std::is_convertible<decltype(*typename std::decay<InputIterator>::type()), int>::value \
+                                    && (std::is_same<typename std::iterator_traits<typename std::decay<InputIterator>::type>::iterator_category, std::input_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<typename std::decay<InputIterator>::type>::iterator_category, std::forward_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<typename std::decay<InputIterator>::type>::iterator_category, std::bidirectional_iterator_tag>::value))
+
+#define DeflIsRandomAccessIterator (std::is_convertible<decltype(*typename std::decay<RandomAccessIterator>::type()), int>::value \
+                                    && std::is_same<typename std::iterator_traits<typename std::decay<RandomAccessIterator>::type>::iterator_category, std::random_access_iterator_tag>::value)
+
+#define DeflIsOutputIterator       (std::is_convertible<decltype(*typename std::decay<OutputIterator>::type()), int>::value \
+                                    && (std::is_same<typename std::iterator_traits<typename std::decay<OutputIterator>::type>::iterator_category, std::output_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<typename std::decay<OutputIterator>::type>::iterator_category, std::forward_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<typename std::decay<OutputIterator>::type>::iterator_category, std::bidirectional_iterator_tag>::value))
 
 #define DeflInputAbortable_InputFunctor \
-                                 (1* !(std::is_same<typename std::result_of<InputFunctor()>::type, unsigned char>::value \
-                                    || std::is_same<typename std::result_of<InputFunctor()>::type,   signed char>::value \
-                                    || std::is_same<typename std::result_of<InputFunctor()>::type,          char>::value))
+                                 (1* !(std::is_same<typename std::decay<typename std::result_of<InputFunctor()>::type>::type, unsigned char>::value \
+                                    || std::is_same<typename std::decay<typename std::result_of<InputFunctor()>::type>::type,   signed char>::value \
+                                    || std::is_same<typename std::decay<typename std::result_of<InputFunctor()>::type>::type,          char>::value))
 #define DeflOutputAbortable_OutputFunctor \
                                  (2* std::is_same<typename std::result_of<OutputFunctor(int)>::type, bool>::value)
 #define DeflOutputAbortable_WindowFunctor \
-                                 (2* std::is_convertible<typename std::result_of<WindowFunctor(int,int)>::type, int>::value)
+                                 (2* std::is_convertible<typename std::decay<typename std::result_of<WindowFunctor(int,int)>::type>::type, int>::value)
 
+/* The functor base with window functor */
 template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
 typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindowFunctor, int>::type
     Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy)
@@ -666,6 +646,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindo
                                      std::forward<WindowFunctor>(outputcopy));
 }
 
+/* The functor base without window functor */
 template<typename InputFunctor, typename OutputFunctor>
 typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor, int>::type
     Deflate(InputFunctor&& input, OutputFunctor&& output)
@@ -685,7 +666,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor, int>::type
     return Deflate<Abortable> (state,
         std::forward<InputFunctor>(input),
         Put,
-        [&](std::uint_least16_t length, std::uint_fast16_t offs)
+        [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
             // length=0 means that offs is the size of the window.
             for(; length>0; --length)
@@ -698,20 +679,32 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsOutputFunctor, int>::type
         });
 }
 
+
+
 template<typename InputFunctor, typename RandomAccessIterator>
 typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::type
     Deflate(InputFunctor&& input, RandomAccessIterator&& target)
 {
     constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor; // Output is not abortable
 
-    // Using a window functor, not a separate window.
     return Deflate<Abortable> (std::forward<InputFunctor>(input),
         [&](unsigned char l) { *target++ = l; },
-        [&](std::uint_least16_t length, std::uint_fast16_t offs)
+        [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
             // length=0 means that offs is the size of the window.
             for(; length--; ++target) { *target = *(target-offs); }
         });
+}
+
+
+template<typename InputFunctor, typename OutputIterator>
+typename std::enable_if<DeflIsInputFunctor && DeflIsOutputIterator, int>::type
+    Deflate(InputFunctor&& input, OutputIterator&& target)
+{
+    constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor; // Output is not abortable
+
+    return Deflate<Abortable> (std::forward<InputFunctor>(input),
+                               [&](unsigned char l) { *target++ = l; });
 }
 
 template<typename InputFunctor, typename RandomAccessIterator>
@@ -727,7 +720,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::
             target[target_size++] = l;
             return false;
         },
-        [&](std::uint_least16_t length, std::uint_fast16_t offs)
+        [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
             // length=0 means that offs is the size of the window.
             for(; length > 0; ++target_size, --length)
@@ -751,7 +744,7 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::
             *target_begin++ = l;
             return false;
         },
-        [&](std::uint_least16_t length, std::uint_fast16_t offs)
+        [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
             // length=0 means that offs is the size of the window.
             for(; length > 0; --length, ++target_begin)
@@ -763,63 +756,31 @@ typename std::enable_if<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>::
         });
 }
 
-template<typename ForwardIterator, typename OutputIterator>
-typename std::enable_if<DeflIsForwardIterator && DeflIsOutputIterator, int>::type
-    Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output)
-{
-    return Deflate([&]()                { return begin==end ? -1 : *begin++; },
-                   [&](unsigned char l) { *output++ = l; });
-}
 
-template<typename ForwardIterator, typename OutputFunctor>
-typename std::enable_if<DeflIsForwardIterator && DeflIsOutputFunctor, int>::type
-    Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output)
-{
-    return Deflate([&]()                { return begin==end ? -1 : *begin++; },
-                   std::forward<OutputFunctor>(output));
-}
-
-template<typename ForwardIterator, typename OutputFunctor, typename WindowFunctor>
-typename std::enable_if<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, int>::type
-    Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output, WindowFunctor&& outputcopy)
-{
-    return Deflate([&]()                { return begin==end ? -1 : *begin++; },
-                   std::forward<OutputFunctor>(output),
-                   std::forward<WindowFunctor>(outputcopy));
-}
-
-template<typename InputIterator, typename OutputIterator>
+template<typename InputIterator, typename... Args>
 typename std::enable_if<DeflIsInputIterator, int>::type
-    Deflate(InputIterator&& input, OutputIterator&& output)
+    Deflate(InputIterator&& input, Args&&... args)
 {
-    return Deflate([&]()                { return *input++; },
-                   [&](unsigned char l) { *output++ = l; });
+    return Deflate([&]() { return *input++; },
+                   std::forward<Args>(args)...);
 }
 
-template<typename ForwardIterator, typename RandomAccessIterator>
-typename std::enable_if<DeflIsForwardIterator && DeflIsRandomAccessIterator, int>::type
-    Deflate(ForwardIterator&& begin,             ForwardIterator&& end,
-            RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end)
+template<typename ForwardIterator, typename... Args>
+typename std::enable_if<DeflIsForwardIterator, int>::type
+    Deflate(ForwardIterator&& begin, ForwardIterator&& end,  Args&&... args)
 {
-    return Deflate(
-        [&]() { return begin==end ? -1 : *begin++; },
-        [&](unsigned char l)
-        {
-            if(target_begin == target_end) return true;
-            *target_begin++ = l;
-            return false;
-        },
-        [&](std::uint_least16_t length, std::uint_fast16_t offs)
-        {
-            // length=0 means that offs is the size of the window.
-            for(; length > 0; --length, ++target_begin)
-            {
-                if(target_begin == target_end) break;
-                *target_begin = *(target_begin - offs);
-            }
-            return length;
-        });
+    return Deflate([&]()                { return begin==end ? -1 : *begin++; },
+                   std::forward<Args>(args)...);
 }
+
+template<typename ForwardIterator, typename... Args>
+typename std::enable_if<DeflIsForwardIterator, int>::type
+    Deflate(ForwardIterator&& begin, std::size_t length,  Args&&... args)
+{
+    return Deflate([&]() { return length ? --length, *begin++ : -1; },
+                   std::forward<Args>(args)...);
+}
+
 
 #undef DeflIsWindowFunctor
 #undef DeflIsInputFunctor
