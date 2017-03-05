@@ -928,6 +928,9 @@ std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, DeflReturnTy
 
 
 /**** The same six, but with two ForwardIterators converted into InputFunctor *****/
+/* All this repetition hurts me, but there is no way to combine
+ * enable_if, auto return type, and parameter packs. At least I couldn't find any.
+ */
 
 #define DeflInf [&]() { if(begin==end) { return -1; } auto r = *begin; ++begin; return r; }
 

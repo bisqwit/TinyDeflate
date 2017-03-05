@@ -142,9 +142,13 @@ int Deflate(InputIterator&& begin, std::size_t length, RandomAccessIterator&& ta
 // Finally, the following three patterns are available, if you need to know
 // after decompression how many bytes were read and/or written:
 
+struct DeflateTrackNoSize{};
 struct DeflateTrackInSize{};
 struct DeflateTrackOutSize{};
 struct DeflateTrackBothSize{};
+
+template<typename... Args>
+int Deflate(Args&&... args, DeflateTrackNoSize); // (Same as no tag)
 
 template<typename... Args>
 std::pair<int, std::uint_fast64_t> Deflate(Args&&... args, DeflateTrackInSize); // (11)
@@ -154,6 +158,8 @@ std::pair<int, std::uint_fast64_t> Deflate(Args&&... args, DeflateTrackOutSize);
 
 template<typename... Args>
 std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>> Deflate(Args&&... args, DeflateTrackBothSize); // (13)
+
+// A counter for sizes is only allocated if explicitly requested by using one of these three overloads.
 ```
 
 1) If the output functor (`output`) returns a `bool`, and the returned value is `true`, the decompression aborts with return value -3
@@ -270,39 +276,35 @@ Decompress the standard input into the standard output (uses 32 kB automatically
     Deflate(std::getchar, std::putchar);
 ```
 
-Decompress an array containing gzipped data into another array that must be large enough to hold the result. A window buffer will not be allocated.
+Decompress an array containing gzipped data into another array that must be large enough to hold the result.
+A window buffer will not be allocated.
 
 ```C++
     extern const char compressed_data[];
     extern unsigned char outbuffer[131072];
     
-    unsigned inpos = 0;
-    Deflate([&]() { return compressed_data[inpos++]; },
-            outbuffer);
+    Deflate(compressed_data+0, outbuffer+0);
 ```
 
-Same as above, but with range checking:
+Same as above, but with range checking for output, and reporting of written size:
 
 ```C++
     extern const char compressed_data[];
     extern unsigned char outbuffer[131072];
     
-    unsigned inpos = 0;
-    int result = Deflate([&]() { return compressed_data[inpos++]; },
-            outbuffer,
-            sizeof(outbuffer));
-    if(result != 0) std::fprintf(stderr, "Error\n");
+    auto result = Deflate(compressed_data+0, outbuffer+0, sizeof(outbuffer), DeflateTrackOutSize{});
+    if(result.first != 0) std::fprintf(stderr, "Error %d\n", result.first);
+    std::fprintf(stderr, "%u bytes written\n", unsigned(result.second));
 ```
 
-Same as above, but with more range checking:
+Same as above, but with range checking for both input and output:
 
 ```C++
     extern const char compressed_data[];
     extern unsigned compressed_data_length;
     extern unsigned char outbuffer[131072];
     
-    int result = Deflate(compressed_data, compressed_data + compressed_data_length,
-                         outbuffer, outbuffer + sizeof(outbuffer));
+    int result = Deflate(compressed_data+0, compressed_data_length, outbuffer, outbuffer + sizeof(outbuffer));
     if(result != 0) std::fprintf(stderr, "Error\n");
 ```
 
