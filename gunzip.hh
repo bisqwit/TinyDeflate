@@ -82,7 +82,7 @@ struct RandomAccessBitArrayBase
     static constexpr unsigned Ubytes = sizeof(U), Ubits = Ubytes*8;
 
     template<unsigned Size>
-    static std::uint_fast64_t Get(const U* data, unsigned index)
+    static std::uint_fast64_t Get(const U* data, unsigned index) throw()
     {
         unsigned bitpos = index*Size, unitpos = bitpos / Ubits, shift = bitpos % Ubits;
         std::uint_fast64_t result = data[unitpos] >> shift;
@@ -96,7 +96,7 @@ struct RandomAccessBitArrayBase
     }
 
     template<unsigned Size, bool update = false>
-    static void Set(U* data, unsigned index, std::uint_fast64_t value)
+    static void Set(U* data, unsigned index, std::uint_fast64_t value) throw()
     {
         unsigned bitpos = index*Size, unitpos = bitpos / Ubits, eat = 0;
         // Make sure our storage unit is at least as bit as value
@@ -254,7 +254,7 @@ namespace gunzip_ns
         // Theoretical size limits: count[] : 0-288 (9 bits * 16)                       = 18 bytes
         //                          offs[] : theoretically max. 28310976 (25 bits * 16) = 50 bytes
         void Create(unsigned which, unsigned num_values,
-                    const RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4>& lengths, unsigned offset)
+                    const RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4>& lengths, unsigned offset) throw()
         {
             if(!which) { used=0; branch0=0; branch1=0; }
             constexpr unsigned ElemBits = 24, OffsOffset = 0, CountOffset = 1;
@@ -351,7 +351,7 @@ namespace gunzip_ns
 
 #ifdef DEFLATE_USE_DATA_TABLES
     template<bool=0> // Using a dummy template parameter makes this function and its data weak,
-    inline const std::uint_least8_t* GetBTable() // removing linker problems in multi-module use
+    inline const std::uint_least8_t* GetBTable() throw() // removing linker problems in multi-module use
     {
         static const std::uint_least8_t data[] {
             // Length bases (0-31)
@@ -363,7 +363,7 @@ namespace gunzip_ns
         return data;
     }
     template<bool=0>
-    inline const std::uint_least16_t* GetWTable()
+    inline const std::uint_least16_t* GetWTable() throw()
     {
         static const std::uint_least16_t data[32] {
              1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577, 0,0 };
