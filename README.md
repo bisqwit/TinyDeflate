@@ -31,7 +31,7 @@ All three settings at 'false' will consume 2940 bytes of automatic memory + alig
 * No dynamic memory is allocated under any circumstances, unless your user-supplied functors do it.
 * Aside from assert() in assert.h and some template metaprogramming tools in type_traits, no standard library functions are used.
 * No global variables.
-* No exceptions or runtime type identification is required.
+* Compatible with -fno-exceptions -fno-rtti compilation.
 * Option to compile without constant arrays.
 
 ## Rationale
@@ -79,6 +79,7 @@ int Deflate(InputFunctor&& input, RandomAccessIterator&& target_begin, RandomAcc
 
 // These are the same as the first six,
 // but instead of an input functor, they use an input iterator.
+// An input iterator is dereferenced and read at most once (per byte), and then incremented.
 
 template<typename InputIterator, typename OutputFunctor>
 int Deflate(InputIterator&& input, OutputFunctor&& output); // (2) (7) (9)
@@ -101,6 +102,7 @@ int Deflate(InputIterator&& input, RandomAccessIterator&& target_begin, RandomAc
 
 // These are the same as the first six, but instead of an input functor,
 // they use a pair of forward iterators to indicate the range of input data.
+// Forward iterators are used like input iterators, but two iterators can be compared for equality.
 
 template<typename ForwardIterator, typename OutputFunctor>
 int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output); // (2) (6) (7)
@@ -196,28 +198,30 @@ bool output(type1 byte_to_output)
 void  outputcopy(type1 length, type2 offs)
 type2 outputcopy(type1 length, type2 offs)
 
+// An InputIterator must have at least the following operations defined,
+// where type1 is convertible into unsigned char:
+const type1& operator*() const
+InputIterator& operator++()
+
+// A OutputIterator must have at least the following operations defined,
+// where type1 is convertible into unsigned char:
+type1& operator*() const
+OutputIterator& operator++()
+
 // A ForwardIterator must have at least the following operations defined,
 // where type1 is convertible into unsigned char:
 const type1& operator*() const
+ForwardIterator& operator++()
 bool operator==(const ForwardIterator&) const
-ForwardIterator operator++(int)
 
 // A RandomAccessIterator must have at least the following operations defined,
 // where type1 is convertible into unsigned char,
 // and type2 is a signed integer type (may be negative):
 type1& operator*()
 type1& operator[] (type2)
-RandomAccessIterator operator++(int)
-
-// An InputIterator must have at least the following operations defined,
-// where type1 is convertible into unsigned char:
-const type1& operator*() const
-InputIterator operator++(int)
-
-// A OutputIterator must have at least the following operations defined,
-// where type1 is convertible into unsigned char:
-type1& operator*() const
-OutputIterator operator++(int)
+RandomAccessIterator operator- (type2)
+RandomAccessIterator& operator++()
+bool operator==(const RandomAccessIterator&) const
 ```
 
 ## Example use:
@@ -291,5 +295,33 @@ Decompress using a custom window function (the separate 32 kB window buffer will
                  {
                      result.push_back( result[result.size()-offset] );
                  }
+            });
+```
+
+Same as above, but stop decompressing once 4096 bytes have been written:
+
+```C++
+    std::vector<unsigned char> result;
+    
+    Deflate(std::getchar,
+            [&](unsigned byte)
+            {
+                if(result.size() >= 4096) return true;
+                result.push_back(byte);
+                return false;
+            },
+            [&](unsigned length, unsigned offset)
+            {
+                 if(!length)
+                 {
+                     // offset contains the maximum look-behind distance.
+                     // You could use this information to allocate a buffer of a particular size.
+                     // length=0 case is invoked exactly once before any length!=0 cases are.
+                 }
+                 for(; result.size() < 4096 && length > 0; --length)
+                 {
+                     result.push_back( result[result.size()-offset] );
+                 }
+                 return length;
             });
 ```
