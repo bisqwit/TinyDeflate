@@ -52,9 +52,9 @@
 // Results:
 //       0 = decompression complete
 //      -1 = data error
-//       1 = input functor returned a value outside 0x00..0xFF range
-//       2 = output functor returned nonzero / bool true value
-//       3 = outputcopy functor returned nonzero remaining length value
+//      -2 = input functor returned a value outside 0x00..0xFF range
+//      -3 = output functor returned nonzero / bool true value
+//      -4 = outputcopy functor returned nonzero remaining length value
 //
 template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
 int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy);
@@ -62,6 +62,11 @@ int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& output
 // Check README.md for the full list of versions of Deflate() available.
 
 #endif
+
+struct DeflateTrackNoSize{};
+struct DeflateTrackInSize{};
+struct DeflateTrackOutSize{};
+struct DeflateTrackBothSize{};
 
 
 // The rest of the file is just for the curious about implementation.
@@ -74,6 +79,47 @@ namespace gunzip_ns
     static constexpr bool USE_BITARRAY_FOR_HUFFNODES = true;                 /* 392 bytes save */
     #define DEFLATE_USE_DATA_TABLES
 }
+
+#define DeflIsInputFunctor  (std::is_convertible<std::result_of_t<std::decay_t<InputFunctor>()>,int>::value /*\
+                             && !std::is_pointer<std::decay_t<InputFunctor>>::value*/)
+#define DeflIsOutputFunctor        (std::is_same<std::result_of_t<std::decay_t<OutputFunctor>(int)>,void>::value \
+                                 || std::is_convertible<std::result_of_t<std::decay_t<OutputFunctor>(int)>,bool>::value)
+#define DeflIsWindowFunctor        (std::is_convertible<std::result_of_t<std::decay_t<WindowFunctor>(int,int)>,int>::value \
+                                        || std::is_same<std::result_of_t<std::decay_t<WindowFunctor>(int,int)>,void>::value)
+
+#define DeflIsForwardIterator   (std::is_convertible<typename std::iterator_traits<std::decay_t<ForwardIterator>>::value_type, unsigned char>::value \
+                                    && (std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::forward_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::bidirectional_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::random_access_iterator_tag>::value))
+
+#define DeflIsInputIterator     (std::is_convertible<typename std::iterator_traits<std::decay_t<InputIterator>>::value_type, unsigned char>::value)
+
+#define DeflIsRandomAccessIterator (std::is_convertible<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::value_type, unsigned char>::value \
+                                  && !std::is_const<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::reference>::value \
+                                    && std::is_same<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::iterator_category, std::random_access_iterator_tag>::value)
+
+#define DeflIsOutputIterator    (std::is_convertible<typename std::iterator_traits<std::decay_t<OutputIterator>>::value_type, unsigned char>::value \
+                                   && !std::is_const<typename std::iterator_traits<std::decay_t<OutputIterator>>::reference>::value \
+                                   && !std::is_pointer<std::decay_t<OutputIterator>>::value \
+                                    && (std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::output_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::forward_iterator_tag>::value \
+                                     || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::bidirectional_iterator_tag>::value))
+
+#define DeflIsSizeType           (std::is_convertible<std::decay_t<SizeType>, std::size_t>::value \
+                                  && !std::is_pointer<std::decay_t<SizeType>>::value)
+#define DeflIsSizeType2          (std::is_convertible<std::decay_t<SizeType2>, std::size_t>::value \
+                                  && !std::is_pointer<std::decay_t<SizeType2>>::value)
+
+#define DeflInputAbortable_InputFunctor \
+                                 (1* !(std::is_same<std::decay_t<std::result_of_t<InputFunctor()>>, unsigned char>::value \
+                                    || std::is_same<std::decay_t<std::result_of_t<InputFunctor()>>,   signed char>::value \
+                                    || std::is_same<std::decay_t<std::result_of_t<InputFunctor()>>,          char>::value))
+#define DeflOutputAbortable_OutputFunctor \
+                                 (2* std::is_same<std::result_of_t<OutputFunctor(int)>, bool>::value)
+#define DeflOutputAbortable_WindowFunctor \
+                                 (2* std::is_convertible<std::decay_t<std::result_of_t<WindowFunctor(int,int)>>, int>::value)
+#define DeflReturnType std::result_of_t<gunzip_ns::SizeTracker<SizeTrackTag>(int)>
+
 
 // RandomAccessBitArray: An engine for arrays of data items that are smaller than a byte
 template<typename U = std::uint_least64_t>
@@ -169,6 +215,8 @@ struct RandomAccessBitArray
 
 namespace gunzip_ns
 {
+    struct dummy{};
+
     template<unsigned bits>
     using SmallestType = std::conditional_t< (bits<=16),
                          std::conditional_t< (bits<= 8), std::uint_least8_t,  std::uint_least16_t>,
@@ -420,6 +468,116 @@ namespace gunzip_ns
             return length != 0;
         }
     };
+
+    struct SizeTracker_NoOutput
+    {
+        inline void OutByte()                    { }
+        inline void OutBytes(std::uint_fast64_t) { }
+
+        // Dummy forwarders. Do the same as std::forward.
+        template<typename T>
+        static inline constexpr T&& ForwardOutput(std::remove_reference_t<T>& fun) { return static_cast<T&&>(fun); }
+        template<typename T>
+        static inline constexpr T&& ForwardOutput(std::remove_reference_t<T>&& fun) { return static_cast<T&&>(fun); }
+
+        template<typename T>
+        static inline constexpr T&& ForwardWindow(std::remove_reference_t<T>& fun) { return static_cast<T&&>(fun); }
+        template<typename T>
+        static inline constexpr T&& ForwardWindow(std::remove_reference_t<T>&& fun) { return static_cast<T&&>(fun); }
+    };
+    struct SizeTracker_NoInput
+    {
+        inline void InByte()                    { }
+        inline void InBytes(std::uint_fast64_t) { }
+
+        template<typename T>
+        static inline constexpr T&& ForwardInput(std::remove_reference_t<T>& fun) { return static_cast<T&&>(fun); }
+        template<typename T>
+        static inline constexpr T&& ForwardInput(std::remove_reference_t<T>&& fun) { return static_cast<T&&>(fun); }
+    };
+    struct SizeTracker_DoInput
+    {
+        std::uint_fast64_t insize=0;
+
+        inline void InByte()                      { ++insize; }
+        inline void InBytes(std::uint_fast64_t n) { insize += n; }
+
+        template<typename InputFunctor, std::enable_if_t<!DeflInputAbortable_InputFunctor,gunzip_ns::dummy>...>
+        auto ForwardInput(const InputFunctor& input)
+        {
+            return [&]() { InByte(); return input(); };
+        }
+
+        template<typename InputFunctor, std::enable_if_t<DeflInputAbortable_InputFunctor,gunzip_ns::dummy>...>
+        auto ForwardInput(const InputFunctor& input)
+        {
+            return [&]() { auto r = input(); if(!(r & ~0xFF)) { InByte(); } return r; };
+        }
+    };
+    struct SizeTracker_DoOutput
+    {
+        std::uint_fast64_t outsize=0;
+
+        inline void OutByte()                      { ++outsize; }
+        inline void OutBytes(std::uint_fast64_t n) { outsize += n; }
+
+        template<typename OutputFunctor, std::enable_if_t<!DeflOutputAbortable_OutputFunctor,gunzip_ns::dummy>...>
+        auto ForwardOutput(const OutputFunctor& output)
+        {
+            return [&](unsigned char byte) { OutByte(); return output(byte); };
+        }
+
+        template<typename OutputFunctor, std::enable_if_t<DeflOutputAbortable_OutputFunctor,gunzip_ns::dummy>...>
+        auto ForwardOutput(const OutputFunctor& output)
+        {
+            return [&](unsigned char byte) { auto r = output(byte); if(!r) { OutByte(); } return r; };
+        }
+
+        template<typename WindowFunctor, std::enable_if_t<!DeflOutputAbortable_WindowFunctor,gunzip_ns::dummy>...>
+        auto ForwardWindow(const WindowFunctor& outputcopy)
+        {
+            return [&](std::uint_least16_t length, std::uint_fast32_t offset)
+            {
+                OutBytes(length);
+                return outputcopy(length, offset);
+            };
+        }
+
+        template<typename WindowFunctor, std::enable_if_t<DeflOutputAbortable_WindowFunctor,gunzip_ns::dummy>...>
+        auto ForwardWindow(const WindowFunctor& outputcopy)
+        {
+            return [&](std::uint_least16_t length, std::uint_fast32_t offset)
+            {
+                auto remain = outputcopy(length, offset);
+                OutBytes(length - remain);
+                return remain;
+            };
+        }
+    };
+
+    template<typename TrackType>
+    struct SizeTracker: public SizeTracker_NoOutput, public SizeTracker_NoInput
+    {
+        inline int operator() (int returncode) const { return returncode; }
+    };
+    template<>
+    struct SizeTracker<DeflateTrackOutSize>: public SizeTracker_NoInput, public SizeTracker_DoOutput
+    {
+        typedef std::pair<int,std::uint_fast64_t> result;
+        inline result operator() (int returncode) const { return result{returncode,outsize}; }
+    };
+    template<>
+    struct SizeTracker<DeflateTrackInSize>: public SizeTracker_NoOutput, public SizeTracker_DoInput
+    {
+        typedef std::pair<int,std::uint_fast64_t> result;
+        inline result operator() (int returncode) const { return result{returncode,insize}; }
+    };
+    template<>
+    struct SizeTracker<DeflateTrackBothSize>: public SizeTracker_DoInput, public SizeTracker_DoOutput
+    {
+        typedef std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>> result;
+        inline result operator() (int returncode) const { return result{returncode,std::make_pair(insize,outsize)}; }
+    };
 }//ns
 
 /* Values of Abortable:
@@ -441,11 +599,6 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             OutputFunctor&& output,
             WindowFunctor&& outputcopy)
 {
-    // Return values: -1 = error in input data
-    //                 0 = decompression complete
-    //                 1 = input()      returned non-byte (only if Abortable&1)
-    //                 2 = outputcopy() returned nonzero (only if Abortable&2)
-    //                 3 = output()     returned true (only if Abortable&2)
     using namespace gunzip_ns;
 
     // The following routines are macros rather than e.g. lambda functions,
@@ -454,18 +607,18 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
     // Bit-by-bit input routine
     #define DummyGetBits(numbits) do { \
         auto p = state.template GetBits<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), numbits); \
-        if((Abortable & 1) && !~p) return 1; \
+        if((Abortable & 1) && !~p) return -2; \
     } while(0)
 
     #define GetBits(numbits, target) \
         auto p = state.template GetBits<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), numbits); \
-        if((Abortable & 1) && !~p) return 1; \
+        if((Abortable & 1) && !~p) return -2; \
         target = p
 
     // Huffman tree read routine.
     #define HuffRead(tree, which, target) \
         auto p = state.HuffRead<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), tree, which); \
-        if((Abortable & 1) && !~p) return 1; \
+        if((Abortable & 1) && !~p) return -2; \
         target = p
 
     #define Fail_If(condition) do { \
@@ -551,7 +704,7 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
                 while(a-- & 0xFFFF)
                 {
                     GetBits(8, unsigned char octet);
-                    while(OutputHelper<bool(Abortable&2)>::output(output, octet)) { return 2; }
+                    while(OutputHelper<bool(Abortable&2)>::output(output, octet)) { return -3; }
                 }
                 goto skipdef;
             }
@@ -575,7 +728,7 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             HuffRead(*state.cur_table, 0, std::uint_least16_t lencode); // 0..287
             if(!(lencode & -256)) // 0..255: literal byte
             {
-                while(OutputHelper<bool(Abortable&2)>::output(output, lencode)) { return 2; }
+                while(OutputHelper<bool(Abortable&2)>::output(output, lencode)) { return -3; }
             }
             else if(!(lencode & 0xFF)) break; // 256=end
             else // 257..287: length code for backwards reference
@@ -583,7 +736,7 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
                 GetBits(lbits(lencode), std::uint_least16_t length); length += lbase(lencode);
                 {HuffRead(*state.cur_table, 1, std::uint_least8_t distcode); // Read distance code (0..31)
                 {GetBits(dbits(distcode), std::uint_least32_t offset); offset += dbase(distcode);
-                while(OutputHelper<bool(Abortable&2)>::outputcopy(outputcopy,length,offset)) { return 3; }}}
+                while(OutputHelper<bool(Abortable&2)>::outputcopy(outputcopy,length,offset)) { return -4; }}}
             }
         }
 skipdef:if(header & 1) break; // last block flag
@@ -596,78 +749,43 @@ skipdef:if(header & 1) break; // last block flag
     return 0;
 }
 
-#define DeflIsInputFunctor  (std::is_convertible<std::result_of_t<std::decay_t<InputFunctor>()>,int>::value /*\
-                             && !std::is_pointer<std::decay_t<InputFunctor>>::value*/)
-#define DeflIsOutputFunctor        (std::is_same<std::result_of_t<std::decay_t<OutputFunctor>(int)>,void>::value \
-                                 || std::is_convertible<std::result_of_t<std::decay_t<OutputFunctor>(int)>,bool>::value)
-#define DeflIsWindowFunctor        (std::is_convertible<std::result_of_t<std::decay_t<WindowFunctor>(int,int)>,int>::value \
-                                        || std::is_same<std::result_of_t<std::decay_t<WindowFunctor>(int,int)>,void>::value)
-
-#define DeflIsForwardIterator   (std::is_convertible<typename std::iterator_traits<std::decay_t<ForwardIterator>>::value_type, unsigned char>::value \
-                                    && (std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::forward_iterator_tag>::value \
-                                     || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::bidirectional_iterator_tag>::value \
-                                     || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::random_access_iterator_tag>::value))
-
-#define DeflIsInputIterator     (std::is_convertible<typename std::iterator_traits<std::decay_t<InputIterator>>::value_type, unsigned char>::value)
-
-#define DeflIsRandomAccessIterator (std::is_convertible<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::value_type, unsigned char>::value \
-                                  && !std::is_const<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::reference>::value \
-                                    && std::is_same<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::iterator_category, std::random_access_iterator_tag>::value)
-
-#define DeflIsOutputIterator    (std::is_convertible<typename std::iterator_traits<std::decay_t<OutputIterator>>::value_type, unsigned char>::value \
-                                   && !std::is_const<typename std::iterator_traits<std::decay_t<OutputIterator>>::reference>::value \
-                                   && !std::is_pointer<std::decay_t<OutputIterator>>::value \
-                                    && (std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::output_iterator_tag>::value \
-                                     || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::forward_iterator_tag>::value \
-                                     || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::bidirectional_iterator_tag>::value))
-
-#define DeflIsSizeType           (std::is_convertible<std::decay_t<SizeType>, std::size_t>::value \
-                                  && !std::is_pointer<std::decay_t<SizeType>>::value)
-
-#define DeflInputAbortable_InputFunctor \
-                                 (1* !(std::is_same<std::decay_t<std::result_of_t<InputFunctor()>>, unsigned char>::value \
-                                    || std::is_same<std::decay_t<std::result_of_t<InputFunctor()>>,   signed char>::value \
-                                    || std::is_same<std::decay_t<std::result_of_t<InputFunctor()>>,          char>::value))
-#define DeflOutputAbortable_OutputFunctor \
-                                 (2* std::is_same<std::result_of_t<OutputFunctor(int)>, bool>::value)
-#define DeflOutputAbortable_WindowFunctor \
-                                 (2* std::is_convertible<std::decay_t<std::result_of_t<WindowFunctor(int,int)>>, int>::value)
-
 /* The functor base with window functor */
-template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindowFunctor, int>
-    Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy)
+template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindowFunctor, DeflReturnType>
+    Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy, SizeTrackTag = {})
 {
     gunzip_ns::DeflateState<false> state;
+    gunzip_ns::SizeTracker<SizeTrackTag> tracker;
 
     // For output to be abortable, both the output functor and window functor must have return types.
     constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor
                                       | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
 
-    return Deflate<Abortable>(state, std::forward<InputFunctor>(input),
-                                     std::forward<OutputFunctor>(output),
-                                     std::forward<WindowFunctor>(outputcopy));
+    return tracker(Deflate<Abortable>(state, tracker.template ForwardInput<InputFunctor>(input),
+                                             tracker.template ForwardOutput<OutputFunctor>(output),
+                                             tracker.template ForwardWindow<WindowFunctor>(outputcopy)));
 }
 
 /* The functor base without window functor */
-template<typename InputFunctor, typename OutputFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor, int>
-    Deflate(InputFunctor&& input, OutputFunctor&& output)
+template<typename InputFunctor, typename OutputFunctor, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor, DeflReturnType>
+    Deflate(InputFunctor&& input, OutputFunctor&& output, SizeTrackTag = {})
 {
     // Using a library-supplied output window. OutputFunctor will be wrapped.
 
     gunzip_ns::DeflateState<true> state;
+    gunzip_ns::SizeTracker<SizeTrackTag> tracker;
 
     constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor
                                       | DeflOutputAbortable_OutputFunctor;
-    auto Put = [&](unsigned char l)
+    auto Put = [&, out = tracker.template ForwardOutput<OutputFunctor>(output)](unsigned char l)
     {
         state.Window.Data[state.Window.Head++ & 32767u] = l;
-        return output(l);
+        return out(l);
     };
 
-    return Deflate<Abortable> (state,
-        std::forward<InputFunctor>(input),
+    return tracker(Deflate<Abortable> (state,
+        tracker.template ForwardInput<InputFunctor>(input),
         Put,
         [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
@@ -679,40 +797,43 @@ std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor, int>
                     break;
             }
             return length;
-        });
+        }));
 }
 
 
-
-template<typename InputFunctor, typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>
-    Deflate(InputFunctor&& input, RandomAccessIterator&& target)
+template<typename InputFunctor, typename OutputIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputFunctor && DeflIsOutputIterator, DeflReturnType>
+    Deflate(InputFunctor&& input, OutputIterator&& target, SizeTrackTag = {})
 {
-    return Deflate(std::forward<InputFunctor>(input),
+    return Deflate(
+        std::forward<InputFunctor>(input),
+        [&](unsigned char l) { *target = l; ++target; }, SizeTrackTag{});
+}
+
+
+template<typename InputFunctor, typename RandomAccessIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, DeflReturnType>
+    Deflate(InputFunctor&& input, RandomAccessIterator&& target, SizeTrackTag = {})
+{
+    return Deflate(
+        std::forward<InputFunctor>(input),
         [&](unsigned char l) { *target = l; ++target; },
         [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
             // length=0 means that offs is the size of the window.
             for(; length--; ++target) { *target = *(target-offs); }
-        });
+        }, SizeTrackTag{});
 }
 
 
-template<typename InputFunctor, typename OutputIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputIterator, int>
-    Deflate(InputFunctor&& input, OutputIterator&& target)
-{
-    return Deflate(std::forward<InputFunctor>(input),
-                   [&](unsigned char l) { *target = l; ++target; });
-}
-
-template<typename InputFunctor, typename RandomAccessIterator, typename SizeType>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeType, int>
-    Deflate(InputFunctor&& input, RandomAccessIterator&& target, SizeType&& target_limit)
+template<typename InputFunctor, typename RandomAccessIterator, typename SizeType, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeType, DeflReturnType>
+    Deflate(InputFunctor&& input, RandomAccessIterator&& target, SizeType&& target_limit, SizeTrackTag = {})
 {
     typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::difference_type used{}, cap=target_limit;
     // Using a window functor, not a separate window.
-    return Deflate(std::forward<InputFunctor>(input),
+    return Deflate(
+        std::forward<InputFunctor>(input),
         [&](unsigned char l)
         {
             if(used >= cap) return true;
@@ -722,21 +843,21 @@ std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeT
         [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
             // length=0 means that offs is the size of the window.
-            for(; length > 0; ++used, --length)
+            for(; length > 0 && used < cap; ++used, --length)
             {
-                if(used >= cap) break;
                 target[used] = target[used - offs];
             }
             return length;
-        });
+        }, SizeTrackTag{});
 }
 
-template<typename InputFunctor, typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>
-    Deflate(InputFunctor&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end)
+template<typename InputFunctor, typename RandomAccessIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, DeflReturnType>
+    Deflate(InputFunctor&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end, SizeTrackTag = {})
 {
     // Using a window functor, not a separate window.
-    return Deflate(std::forward<InputFunctor>(input),
+    return Deflate(
+        std::forward<InputFunctor>(input),
         [&](unsigned char l)
         {
             if(target_begin == target_end) return true;
@@ -746,42 +867,182 @@ std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>
         [&](std::uint_least16_t length, std::uint_fast32_t offs)
         {
             // length=0 means that offs is the size of the window.
-            for(; length > 0; --length, ++target_begin)
+            for(; length > 0 && !(target_begin == target_end); --length, ++target_begin)
             {
-                if(target_begin == target_end) break;
                 *target_begin = *(target_begin - offs);
             }
             return length;
-        });
+        }, SizeTrackTag{});
 }
 
 
-template<typename InputIterator, typename... Args>
-std::enable_if_t<DeflIsInputIterator, int>
-    Deflate(InputIterator&& input, Args&&... args)
+/**** The same six, but with InputIterator converted into InputFunctor *****/
+
+#define DeflInf [&]() { auto r = *input; ++input; return r; }
+
+template<typename InputIterator, typename OutputFunctor, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor, DeflReturnType>
+    Deflate(InputIterator&& input, OutputFunctor&& output, SizeTrackTag = {})
 {
-    return Deflate([&]() { auto r = *input; ++input; return r; },
-                   std::forward<Args>(args)...);
+    return Deflate(DeflInf, std::forward<OutputFunctor>(output), SizeTrackTag{});
+}
+template<typename InputIterator, typename OutputFunctor, typename WindowFunctor, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, DeflReturnType>
+    Deflate(InputIterator&& input, OutputFunctor&& output, WindowFunctor&& outputcopy, SizeTrackTag = {})
+{
+    return Deflate(DeflInf,
+                   std::forward<OutputFunctor>(output),
+                   std::forward<WindowFunctor>(outputcopy), SizeTrackTag{});
+}
+template<typename InputIterator, typename OutputIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsOutputIterator, DeflReturnType>
+    Deflate(InputIterator&& input, OutputIterator&& output, SizeTrackTag = {})
+{
+    return Deflate(DeflInf, std::forward<OutputIterator>(output), SizeTrackTag{});
+}
+template<typename InputIterator, typename RandomAccessIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, DeflReturnType>
+    Deflate(InputIterator&& input, RandomAccessIterator&& target, SizeTrackTag = {})
+{
+    return Deflate(DeflInf, std::forward<RandomAccessIterator>(target), SizeTrackTag{});
+}
+template<typename InputIterator, typename RandomAccessIterator, typename SizeType, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator && DeflIsSizeType, DeflReturnType>
+    Deflate(InputIterator&& input, RandomAccessIterator&& target, SizeType&& target_limit, SizeTrackTag = {})
+{
+    return Deflate(DeflInf, std::forward<RandomAccessIterator>(target),
+                   std::forward<SizeType>(target_limit), SizeTrackTag{});
+}
+template<typename InputIterator, typename RandomAccessIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, DeflReturnType>
+    Deflate(InputIterator&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end, SizeTrackTag = {})
+{
+    return Deflate(DeflInf, std::forward<RandomAccessIterator>(target_begin),
+                   std::forward<RandomAccessIterator>(target_end), SizeTrackTag{});
 }
 
-template<typename ForwardIterator, typename... Args>
-std::enable_if_t<DeflIsForwardIterator, int>
-    Deflate(ForwardIterator&& begin, ForwardIterator&& end,  Args&&... args)
+#undef DeflInf
+
+
+
+
+
+/**** The same six, but with two ForwardIterators converted into InputFunctor *****/
+
+#define DeflInf [&]() { if(begin==end) { return -1; } auto r = *begin; ++begin; return r; }
+
+template<typename ForwardIterator, typename OutputFunctor, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor, DeflReturnType>
+    Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output, SizeTrackTag = {})
 {
-    return Deflate([&]() -> std::common_type_t<int, decltype(*begin)>
-                   { if(begin==end) { return -1; } auto r = *begin; ++begin; return r; },
-                   std::forward<Args>(args)...);
+    return Deflate(DeflInf,
+                   std::forward<OutputFunctor>(output), SizeTrackTag{});
+}
+template<typename ForwardIterator, typename OutputFunctor, typename WindowFunctor, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, DeflReturnType>
+    Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output, WindowFunctor&& outputcopy, SizeTrackTag = {})
+{
+    return Deflate(DeflInf,
+                   std::forward<OutputFunctor>(output),
+                   std::forward<WindowFunctor>(outputcopy), SizeTrackTag{});
+}
+template<typename ForwardIterator, typename OutputIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsForwardIterator && DeflIsOutputIterator, DeflReturnType>
+    Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& output, SizeTrackTag = {})
+{
+    return Deflate(DeflInf,
+                   std::forward<OutputIterator>(output), SizeTrackTag{});
+}
+template<typename ForwardIterator, typename RandomAccessIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, DeflReturnType>
+    Deflate(ForwardIterator&& begin, ForwardIterator&& end, RandomAccessIterator&& target, SizeTrackTag = {})
+{
+    return Deflate(DeflInf,
+                   std::forward<RandomAccessIterator>(target), SizeTrackTag{});
+}
+template<typename ForwardIterator, typename RandomAccessIterator, typename SizeType, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator && DeflIsSizeType, DeflReturnType>
+    Deflate(ForwardIterator&& begin, ForwardIterator&& end, RandomAccessIterator&& target, SizeType&& target_limit, SizeTrackTag = {})
+{
+    return Deflate(DeflInf,
+                   std::forward<RandomAccessIterator>(target),
+                   std::forward<SizeType>(target_limit), SizeTrackTag{});
+}
+template<typename ForwardIterator, typename RandomAccessIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, DeflReturnType>
+    Deflate(ForwardIterator&& begin, ForwardIterator&& end, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end, SizeTrackTag = {})
+{
+    return Deflate(DeflInf,
+                   std::forward<RandomAccessIterator>(target_begin),
+                   std::forward<RandomAccessIterator>(target_end), SizeTrackTag{});
 }
 
-template<typename InputIterator, typename SizeType, typename... Args>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType, int>
-    Deflate(InputIterator&& begin, SizeType&& length, Args&&... args)
+#undef DeflInf
+
+
+
+/**** The same six, but with an InputIterator and a length, converted into InputFunctor *****/
+
+#define DeflInit typename std::iterator_traits<std::decay_t<InputIterator>>::difference_type remain(length)
+#define DeflInf [&]() -> std::common_type_t<int, decltype(*begin)> \
+                { if(!remain) { return -1; } --remain; auto r = *begin; ++begin; return r; }
+
+template<typename InputIterator, typename SizeType, typename OutputFunctor, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor, DeflReturnType>
+    Deflate(InputIterator&& begin, SizeType&& length, OutputFunctor&& output, SizeTrackTag = {})
 {
-    typename std::iterator_traits<std::decay_t<InputIterator>>::difference_type remain(length);
-    return Deflate([&]() -> std::common_type_t<int, decltype(*begin)>
-                   { if(!remain) { return -1; } --remain; auto r = *begin; ++begin; return r; },
-                   std::forward<Args>(args)...);
+    DeflInit;
+    return Deflate(DeflInf,
+                   std::forward<OutputFunctor>(output), SizeTrackTag{});
 }
+template<typename InputIterator, typename SizeType, typename OutputFunctor, typename WindowFunctor, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor && DeflIsWindowFunctor, DeflReturnType>
+    Deflate(InputIterator&& begin, SizeType&& length, OutputFunctor&& output, WindowFunctor&& outputcopy, SizeTrackTag = {})
+{
+    DeflInit;
+    return Deflate(DeflInf,
+                   std::forward<OutputFunctor>(output),
+                   std::forward<WindowFunctor>(outputcopy), SizeTrackTag{});
+}
+template<typename InputIterator, typename SizeType, typename OutputIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputIterator, DeflReturnType>
+    Deflate(InputIterator&& begin, SizeType&& length, OutputIterator&& output, SizeTrackTag = {})
+{
+    DeflInit;
+    return Deflate(DeflInf,
+                   std::forward<OutputIterator>(output), SizeTrackTag{});
+}
+template<typename InputIterator, typename SizeType, typename RandomAccessIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, DeflReturnType>
+    Deflate(InputIterator&& begin, SizeType&& length, RandomAccessIterator&& target, SizeTrackTag = {})
+{
+    DeflInit;
+    return Deflate(DeflInf,
+                   std::forward<RandomAccessIterator>(target), SizeTrackTag{});
+}
+template<typename InputIterator, typename SizeType, typename RandomAccessIterator, typename SizeType2, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator && DeflIsSizeType2, DeflReturnType>
+    Deflate(InputIterator&& begin, SizeType&& length, RandomAccessIterator&& target, SizeType2&& target_limit, SizeTrackTag = {})
+{
+    DeflInit;
+    return Deflate(DeflInf,
+                   std::forward<RandomAccessIterator>(target),
+                   std::forward<SizeType2>(target_limit), SizeTrackTag{});
+}
+template<typename InputIterator, typename SizeType, typename RandomAccessIterator, typename SizeTrackTag = DeflateTrackNoSize>
+std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, DeflReturnType>
+    Deflate(InputIterator&& begin, SizeType&& length, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end, SizeTrackTag = {})
+{
+    DeflInit;
+    return Deflate(DeflInf,
+                   std::forward<RandomAccessIterator>(target_begin),
+                   std::forward<RandomAccessIterator>(target_end), SizeTrackTag{});
+}
+
+#undef DeflInf
+#undef DeflInit
+
+
 
 
 #undef DeflIsWindowFunctor
@@ -792,6 +1053,8 @@ std::enable_if_t<DeflIsInputIterator && DeflIsSizeType, int>
 #undef DeflIsInputIterator
 #undef DeflIsOutputIterator
 #undef DeflIsSizeType
+#undef DeflIsSizeType2
 #undef DeflInputAbortable_InputFunctor
 #undef DeflOutputAbortable_OutputFunctor
 #undef DeflOutputAbortable_WindowFunctor
+#undef DeflReturnType

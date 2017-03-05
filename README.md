@@ -137,50 +137,75 @@ int Deflate(InputIterator&& begin, std::size_t length, RandomAccessIterator&& ta
 
 template<typename InputIterator, typename RandomAccessIterator>
 int Deflate(InputIterator&& begin, std::size_t length, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (4) (7) (8) (10)
+
+
+// Finally, the following three patterns are available, if you need to know
+// after decompression how many bytes were read and/or written:
+
+struct DeflateTrackInSize{};
+struct DeflateTrackOutSize{};
+struct DeflateTrackBothSize{};
+
+template<typename... Args>
+std::pair<int, std::uint_fast64_t> Deflate(Args&&... args, DeflateTrackInSize); // (11)
+
+template<typename... Args>
+std::pair<int, std::uint_fast64_t> Deflate(Args&&... args, DeflateTrackOutSize); // (12)
+
+template<typename... Args>
+std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>> Deflate(Args&&... args, DeflateTrackBothSize); // (13)
 ```
 
-1) If the output functor (`output`) returns a `bool`, and the returned value is `true`, the decompression aborts with return value 2
+1) If the output functor (`output`) returns a `bool`, and the returned value is `true`, the decompression aborts with return value -3
 without writing any more data.
 
-2) If the output functor (`output`) returns a `bool`, and the returned value is `true`, the decompression aborts with return value 2
+2) If the output functor (`output`) returns a `bool`, and the returned value is `true`, the decompression aborts with return value -3
 without writing any more data.
-If the window function returns an integer type, and the returned value is other than 0, the decompression aborts with return value 3
+If the window function returns an integer type, and the returned value is other than 0, the decompression aborts with return value -4
 without writing any more data.
 If either the window function returns `void`, or the output functor does not return a `bool`, aborting on output-full will not be compiled.
 
-3) If `target_limit` bytes have been written into `target` and the decompression is not yet complete, the decompression aborts with return value 2
+3) If `target_limit` bytes have been written into `target` and the decompression is not yet complete, the decompression aborts with return value -3
 without writing any more data.
 
-4) If `target_begin == target_end`, the decompression aborts with return value 2
+4) If `target_begin == target_end`, the decompression aborts with return value -3
 without writing any more data.
 
 5) If the input functor (`input`) returns an integer type other than a `char`, `signed char`, or `unsigned char`,
-and the returned value is smaller than 0 or larger than 255, the decompression aborts with return value 1
+and the returned value is smaller than 0 or larger than 255, the decompression aborts with return value -2
 without reading any more data.
 
-6) If `begin == end`, the decompression aborts with return value 1.
+6) If `begin == end`, the decompression aborts with return value -2.
 
-7) If the input iterator deferences into a value outside the 0 — 255 range, the decompression aborts with return value 1
+7) If the input iterator deferences into a value outside the 0 — 255 range, the decompression aborts with return value -2
 without reading any more data.
 
-8) If `length` bytes have been read from `begin` and the decompression is not yet complete, the decompression aborts with return value 1
+8) If `length` bytes have been read from `begin` and the decompression is not yet complete, the decompression aborts with return value -2
 without reading any more data.
 
 9) A separate 32768-byte sliding window will be automatically and separately allocated for the decompression.
 
 10) The output data buffer is assumed to persist during the call and doubles as the sliding window for the decompression.
 
+11) The `first` field in the return value has the same meaning as the `int` type return value described earlier.    
+The `second` field in the return value contains the number of bytes that were consumed from the input.
 
+12) The `first` field in the return value has the same meaning as the `int` type return value described earlier.    
+The `second` field in the return value contains the number of bytes that were written to the output.
 
+13) The `first` field in the return value has the same meaning as the `int` type return value described earlier.    
+The `second.first` field in the return value contains the number of bytes that were consumed from the input.    
+The `second.second` field in the return value contains the number of bytes that were written to the output.
 
+### Tips
 
-Note that some of these definitions may be ambiguous.
+Some of these definitions may be ambiguous.
 If you hit a compiler error, choose a different call method.
 To help distinguish between (`InputIterator`,`RandomAccessIterator`,`RandomAccessIterator`)
 and (`ForwardIterator`,`ForwardIterator`,`OutputIterator`), make sure the input iterators
 are _const_.
 
-Note: If you do multiple decompression calls in your program in different spots,
+If you do multiple decompression calls in your program in different spots,
 it may be wise to make sure they all use the same type of parameters,
 to avoid having to instantiate multiple copies of `Deflate()`.
 Lambda functors are an offender in this respect, because each lambda has a
