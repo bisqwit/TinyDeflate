@@ -773,11 +773,11 @@ std::enable_if_t<DeflIsForwardIterator, int>
                    std::forward<Args>(args)...);
 }
 
-template<typename ForwardIterator, typename SizeType, typename... Args>
-std::enable_if_t<DeflIsForwardIterator && DeflIsSizeType, int>
-    Deflate(ForwardIterator&& begin, SizeType&& length, Args&&... args)
+template<typename InputIterator, typename SizeType, typename... Args>
+std::enable_if_t<DeflIsInputIterator && DeflIsSizeType, int>
+    Deflate(InputIterator&& begin, SizeType&& length, Args&&... args)
 {
-    typename std::iterator_traits<std::decay_t<ForwardIterator>>::difference_type remain(length);
+    typename std::iterator_traits<std::decay_t<InputIterator>>::difference_type remain(length);
     return Deflate([&]() -> std::common_type_t<int, decltype(*begin)>
                    { if(!remain) { return -1; } --remain; auto r = *begin; ++begin; return r; },
                    std::forward<Args>(args)...);

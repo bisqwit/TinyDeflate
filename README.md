@@ -54,15 +54,19 @@ And there are prototypes that are safe.
 ## Definitions
 
 ```C++
+// Most generic: Input and output functors
 template<typename InputFunctor, typename OutputFunctor>
 int Deflate(InputFunctor&& input, OutputFunctor&& output); // (1) (2) (7)
 
+// An optional window functor can be supplied, so the lib will not allocate 32768-byte look-behind buffer
 template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
 int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy); // (1) (3)
 
+// Output iterator (write only)
 template<typename InputFunctor, typename OutputIterator>
 int Deflate(InputFunctor&& input, OutputIterator&& target); // (1) (7)
 
+// Random-access iterator. It is also used for reading (look-behinds).
 template<typename InputFunctor, typename RandomAccessIterator>
 int Deflate(InputFunctor&& input, RandomAccessIterator&& target); // (1) (8)
 
@@ -72,6 +76,9 @@ int Deflate(InputFunctor&& input, RandomAccessIterator&& target, std::size_t tar
 template<typename InputFunctor, typename RandomAccessIterator>
 int Deflate(InputFunctor&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (1) (5) (8)
 
+
+// These are the same as the first six,
+// but instead of an input functor, they use an input iterator.
 
 template<typename InputIterator, typename OutputFunctor>
 int Deflate(InputIterator&& input, OutputFunctor&& output); // (2) (7) (9)
@@ -92,6 +99,9 @@ template<typename InputIterator, typename RandomAccessIterator>
 int Deflate(InputIterator&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (5) (8) (9)
 
 
+// These are the same as the first six, but instead of an input functor,
+// they use a pair of forward iterators to indicate the range of input data.
+
 template<typename ForwardIterator, typename OutputFunctor>
 int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output); // (2) (6) (7)
 
@@ -111,23 +121,26 @@ template<typename ForwardIterator, typename RandomAccessIterator>
 int Deflate(ForwardIterator&& begin, ForwardIterator&& end, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (5) (6) (8)
 
 
-template<typename ForwardIterator, typename OutputFunctor>
-int Deflate(ForwardIterator&& begin, std::size_t length, OutputFunctor&& output); // (2) (7) (10)
+// These are the same as the first six, but instead of an input functor,
+// they use an input iterator and a length.
 
-template<typename ForwardIterator, typename OutputFunctor, typename WindowFunctor>
-int Deflate(ForwardIterator&& begin, std::size_t length, OutputFunctor&& output, WindowFunctor&& outputcopy); // (3) (10)
+template<typename InputIterator, typename OutputFunctor>
+int Deflate(InputIterator&& begin, std::size_t length, OutputFunctor&& output); // (2) (7) (9) (10)
 
-template<typename ForwardIterator, typename OutputIterator>
-int Deflate(ForwardIterator&& begin, std::size_t length, OutputIterator&& target); // (7) (10)
+template<typename InputIterator, typename OutputFunctor, typename WindowFunctor>
+int Deflate(InputIterator&& begin, std::size_t length, OutputFunctor&& output, WindowFunctor&& outputcopy); // (3) (9) (10)
 
-template<typename ForwardIterator, typename RandomAccessIterator>
-int Deflate(ForwardIterator&& begin, std::size_t length, RandomAccessIterator&& target); // (8) (10)
+template<typename InputIterator, typename OutputIterator>
+int Deflate(InputIterator&& begin, std::size_t length, OutputIterator&& target); // (7) (9) (10)
 
-template<typename ForwardIterator, typename RandomAccessIterator>
-int Deflate(ForwardIterator&& begin, std::size_t length, RandomAccessIterator&& target, std::size_t target_limit); // (4) (8) (10)
+template<typename InputIterator, typename RandomAccessIterator>
+int Deflate(InputIterator&& begin, std::size_t length, RandomAccessIterator&& target); // (8) (9) (10)
 
-template<typename ForwardIterator, typename RandomAccessIterator>
-int Deflate(ForwardIterator&& begin, std::size_t length, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (5) (8) (10)
+template<typename InputIterator, typename RandomAccessIterator>
+int Deflate(InputIterator&& begin, std::size_t length, RandomAccessIterator&& target, std::size_t target_limit); // (4) (8) (9) (10)
+
+template<typename InputIterator, typename RandomAccessIterator>
+int Deflate(InputIterator&& begin, std::size_t length, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (5) (8) (9) (10)
 ```
 
 1) If the input functor (`input`) returns an integer type other than a `char`, `signed char`, or `unsigned char`,
