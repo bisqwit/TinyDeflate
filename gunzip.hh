@@ -110,7 +110,7 @@ namespace gunzip_ns
                                   && !std::is_pointer<std::decay_t<SizeType>>::value)
 #define DeflIsSizeType2          (std::is_convertible<std::decay_t<SizeType2>, std::size_t>::value \
                                   && !std::is_pointer<std::decay_t<SizeType2>>::value)
-#define DeflIsTrackTag           (std::is_convertible<SizeTrackTag, const DeflateTrackTagBase&>::value)
+#define DeflIsTrackTag           (std::is_base_of<DeflateTrackTagBase, std::decay_t<SizeTrackTag>>::value)
 
 #define DeflInputAbortable_InputFunctor \
                                  (1* !(std::is_same<std::decay_t<std::result_of_t<InputFunctor()>>, unsigned char>::value \
