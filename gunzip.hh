@@ -1,6 +1,8 @@
 /* My tiny gzip decompressor without using zlib. - Joel Yliluoma
  * http://iki.fi/bisqwit/ , http://youtube.com/user/Bisqwit
  * Inspired and influenced by a 13th IOCCC winner program by Ron McFarland */
+/* Further optimized based on ideas from tinf library by Joergen Ibsen */
+
 /* Fun fact: Contains zero new/delete, and no STL data structures */
 /* Distributed under the terms of the Zlib license:
 
@@ -75,7 +77,7 @@ namespace gunzip_ns
 {
     // If you want more performance at the expense of RAM use,
     // Turn one or more of these settings to false:
-    static constexpr bool USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION = true; /* 12 bytes save */
+    static constexpr bool USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION = true; /* 8 bytes save */
     static constexpr bool USE_BITARRAY_FOR_LENGTHS = true;                   /* 160 bytes save */
     static constexpr bool USE_BITARRAY_FOR_HUFFNODES = true;                 /* 392 bytes save */
     #define DEFLATE_USE_DATA_TABLES
@@ -134,7 +136,7 @@ struct RandomAccessBitArrayBase
     {
         unsigned bitpos = index*Size, unitpos = bitpos / Ubits, shift = bitpos % Ubits;
         std::uint_fast64_t result = data[unitpos] >> shift;
-        assert(Size <= sizeof(result)*8);
+        //assert(Size <= sizeof(result)*8);
         unsigned acquired = Ubits - shift;
         for(; acquired < Size; acquired += Ubits)
         {
@@ -148,7 +150,7 @@ struct RandomAccessBitArrayBase
     {
         unsigned bitpos = index*Size, unitpos = bitpos / Ubits, eat = 0;
         // Make sure our storage unit is at least as bit as value
-        assert(Ubits >= sizeof(value)*8);
+        //assert(Ubits >= sizeof(value)*8);
         //assert(Size >= sizeof(value)*8 || value < (std::uint64_t(1) << Size));
 
         if(Size % Ubits != 0)
@@ -156,14 +158,14 @@ struct RandomAccessBitArrayBase
             unsigned shift = bitpos % Ubits;
             eat = Ubits - shift; if(eat > Size) eat = Size;
 
-            assert(eat < sizeof(std::uint_fast64_t)*8);
-            assert(shift + eat <= Ubits);
+            //assert(eat < sizeof(std::uint_fast64_t)*8);
+            //assert(shift + eat <= Ubits);
             std::uint_fast64_t vmask = (std::uint64_t(1) << eat)-1;
             if(update)
                 data[unitpos] = (data[unitpos] & ~(vmask << shift)) | (value << shift);
             else
                 data[unitpos] |= value << shift;
-            assert(eat < sizeof(value)*8);
+            //assert(eat < sizeof(value)*8);
             value >>= eat;
             ++unitpos;
         }
@@ -235,7 +237,7 @@ namespace gunzip_ns
         inline void Set(unsigned index, std::uint_fast32_t value) { impl.template Set<Elem,true>(index, value); }
         inline void QSet(unsigned index, std::uint_fast32_t value) { impl.template Set<Elem,false>(index, value); }
         template<unsigned Bits>
-        inline void WSet(unsigned index, std::uint_fast64_t value) { impl.template Set<Bits,false>(index, value); }
+        inline void WSet(unsigned index, std::uint_fast64_t value) { impl.template Set<Bits,true>(index, value); }
     };
 
     template<unsigned Dim, unsigned Elem>
@@ -259,94 +261,74 @@ namespace gunzip_ns
 
 namespace gunzip_ns
 {
-    static constexpr unsigned HuffNodeBits = USE_BITARRAY_FOR_HUFFNODES ? 27 : 32;
-    static constexpr unsigned PoolSize     = 638;
-    // Branches are in 0..637 range (number of pool indexes). --> 9.32 bits needed
-    // Values are in 0..287 range.                            --> 8.17 bits needed
-    // Minimum theoretically possible is 26.805 bits. 27 is pretty good.
-    static_assert(!USE_BITARRAY_FOR_HUFFNODES || PoolSize*PoolSize*288 <= (1 << HuffNodeBits),     "Too few HuffNodeBits");
-    static_assert(!USE_BITARRAY_FOR_HUFFNODES || PoolSize*PoolSize*288  > (1 << (HuffNodeBits-1)), "Too many HuffNodeBits");
-    template<unsigned HuffNodeBits>
-    struct huffnode
+    template<unsigned A,unsigned B, unsigned C,unsigned D>
+    void CreateHuffmanTree(/*const char* what,*/
+                           RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,A,B>& tree_table,
+                           RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,C,D>& tree_trans,
+                           unsigned num_values,
+                           const RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4>& lengths,
+                           unsigned offset) throw()
     {
-        SmallestType<HuffNodeBits> intval; // Any integer type at least HuffNodeBits bits wide
-        static_assert(sizeof(intval)*8 >= HuffNodeBits, "intval is too small");
-        static constexpr unsigned BranchMul1 = USE_BITARRAY_FOR_HUFFNODES ? 640 : 1024;
-        static constexpr unsigned BranchMul2 = USE_BITARRAY_FOR_HUFFNODES ? 640 : 1024;
-        // BranchMul1 and BranchMul2  are arbitrary numbers both >= PoolSize
-        // where log2(637 + BranchMul1*(637 + 287*BranchMul2)) < HuffNodeBits.
-        // They are chosen to make fastest assembler code for the functions below.
-        unsigned GetBranch0() const { return intval % BranchMul1; }
-        unsigned GetBranch1() const { return (intval / BranchMul1) % BranchMul2; }
-        unsigned GetValue()   const { return (intval / (BranchMul1 * BranchMul2)); }
-        huffnode SetBranch0(unsigned b) { /*assert(b < PoolSize);*/ return {intval += (b - GetBranch0())}; }
-        huffnode SetBranch1(unsigned b) { /*assert(b < PoolSize);*/ return {intval += (b - GetBranch1()) * (BranchMul1)}; }
-        huffnode SetValue(unsigned b)   { /*assert(b < 288);*/      return {intval += (b - GetValue()) * (BranchMul1*BranchMul2)}; }
-        static_assert(BranchMul1 >= PoolSize && BranchMul2 >= PoolSize
-            && (PoolSize-1) + BranchMul1*((PoolSize-1) + 287*BranchMul2) < (std::uint64_t(1) << HuffNodeBits), "Illegal BranchMul values");
-    };
-    template<unsigned HuffNodeBits>
-    struct hufftree
-    {
-        using nodetype = huffnode<HuffNodeBits>;
-        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,PoolSize,HuffNodeBits>& storage;
-        std::uint_least16_t used    : 12; // Index of the next unused node in the pool
-        std::uint_least16_t branch0 : 10;
-        std::uint_least16_t branch1 : 10;
-
-        nodetype get(std::uint_fast16_t n) const          { return { SmallestType<HuffNodeBits>(storage.Get(n-1)) }; }
-        void     put(std::uint_fast16_t n, nodetype node) { storage.Set(n-1, node.intval); }
-
-        // Create a huffman tree for num_values, with given lengths.
-        // The tree will be put in branch[which]; other branch not touched.
-        // Length = how many bits to use for encoding this value.
-        // num_values <= 288.
-        // Theoretical size limits: count[] : 0-288 (9 bits * 16)                       = 18 bytes
-        //                          offs[] : theoretically max. 28310976 (25 bits * 16) = 50 bytes
-        void Create(unsigned which, unsigned num_values,
-                    const RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4>& lengths, unsigned offset) throw()
+        constexpr unsigned ElemBits = 9;
+        RandomAccessArray<USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION, 16, ElemBits> offs{}; // 24 or 32 bytes.
+        // Clear code length count table
+        tree_table = {};
+        // Scan symbol length, and sum code length counts
+        //unsigned largest_treetable_value = 0;
+        for(unsigned a = 0; a < num_values; ++a)
         {
-            if(!which) { used=0; branch0=0; branch1=0; }
-            constexpr unsigned ElemBits = 24, OffsOffset = 0, CountOffset = 1;
-            RandomAccessArray<USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION, 17, ElemBits> data{}; // 51 bytes.
-
-            for(unsigned a = 0; a < num_values; ++a)
-            {
-                std::uint_fast8_t len = lengths.Get(offset+a); // Note: Can be zero.
-                data.Set(len+CountOffset, data.Get(len+CountOffset) + 1); // increase count
-            }
-            for(unsigned a = 0; a < 15; a++)
-                data.Set(a+1+OffsOffset,
-                         2u * (data.Get(a+OffsOffset) + data.Get(a+CountOffset)));
-            // Largest values seen in wild for offs[16]: 16777216
-            for(unsigned value = 0; value < num_values; ++value)
-                if(std::uint_fast8_t length = lengths.Get(offset+value))
-                {
-                    nodetype node;
-                    std::uint_fast16_t b = which ? branch1 : branch0;
-                    if(b) { node = get(b); }
-                    else  { if(which) {branch1 = used+1;} else {branch0 = used+1;} put(b = ++used, node = {0}); }
-
-                    std::uint_least32_t q = data.Get(length+OffsOffset); data.Set(length+OffsOffset, q+1); // q = offset[length]++
-                    for(q <<= (32u-length); length--; )
-                    {
-                        bool bit = q >> 31; q <<= 1;
-                        std::uint_fast16_t nextb = bit ? node.GetBranch1() : node.GetBranch0();
-                        if(nextb)  { node = get(b = nextb); }
-                        else       { put(b, bit ? node.SetBranch1(used+1) : node.SetBranch0(used+1));
-                                     put(b = ++used, node = {0}); }
-                    }
-                    put(b, node.SetValue(value));
-                }
+            std::uint_fast8_t len = lengths.Get(offset+a); // Note: Can be zero.
+            unsigned v = tree_table.Get(len)+1;
+            //largest_treetable_value = std::max(largest_treetable_value, v);
+            tree_table.Set(len, v);
         }
-    };
+        tree_table.Set(0, 0);
+
+        //unsigned largest_offs = 0;
+        // Compute offset table for distribution sort
+        for(unsigned sum=0, a = 0; a < 16; ++a)
+        {
+            //largest_offs = std::max(sum, largest_offs);
+            offs.Set(a, sum);
+            sum += tree_table.Get(a);
+        }
+
+        //unsigned largest_treetrans_index=0, largest_treetrans_value=0;
+        // Create code->symbol translation table (symbols sorted by code)
+        for(unsigned value = 0; value < num_values; ++value)
+            if(std::uint_fast8_t length = lengths.Get(offset+value))
+            {
+                unsigned q = offs.Get(length); offs.Set(length, q+1); // q = offset[length]++;
+                //largest_treetrans_index = std::max(largest_treetrans_index, q);
+                //largest_treetrans_value = std::max(largest_treetrans_value, value);
+                tree_trans.Set(q, value);
+            }
+        /*std::fprintf(stderr, "Largest \"%12s\"(treetable_value=%4u, offs=%4u, treetrans_index=%4u, treetrans_value=%4u)\n",
+            what, largest_treetable_value, largest_offs, largest_treetrans_index, largest_treetrans_value);*/
+
+        // Largest values observed in the wild:
+
+        // Dyn Lengths: Max treetable_value =255, max offs =286, max treetrans_index =285, max treetrans_value =285
+        // Stat Lengths:Max treetable_value =152, max offs =288, max treetrans_index =287, max treetrans_value =287
+
+        // Len Lengths: Max treetable_value = 10, max offs = 19, max treetrans_index = 18, max treetrans_value = 18
+        // Dyn Dists:   Max treetable_value = 25, max offs = 30, max treetrans_index = 29, max treetrans_value = 29
+        // Stat Dists:  Max treetable_value = 32, max offs = 32, max treetrans_index = 31, max treetrans_value = 31
+    }
 
     template<bool WithWindow>
     struct DeflateState
     {
         RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4> Lengths; // Lengths are in 0..15 range. 160 bytes are allocated.
-        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, PoolSize, HuffNodeBits> pool; // Total: 638 huffnodes (2160 bytes)
-        hufftree<HuffNodeBits> tables_fixed{pool, 0,0,0}, tables_dyn{pool, 0,0,0}, *cur_table=nullptr;
+
+        // Length tree:
+        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 16, 8> ltable; // Values up to 255 in indexes 1-15.  16 bytes allocated.
+        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,288, 9> ltrans; // Values up to 287 in indexes 0-287. 328 bytes allocated.
+        // Distance tree:
+        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 16, 6> dtable; // Values up to 32 in indexes 1-15. 16 bytes allocated.
+        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 32, 5> dtrans; // Values up to 31 in indexes 0-31. 24 bytes allocated.
+        bool fixed_table = false;
+
         std::uint_least8_t BitCache = 0, BitCount = 0;
 
         template<typename InputFunctor, bool Abortable>
@@ -381,21 +363,26 @@ namespace gunzip_ns
             }
         }
 
-        template<typename InputFunctor, bool Abortable>
-        std::uint_least32_t HuffRead(InputFunctor&& input, hufftree<HuffNodeBits>& tree, bool which)
+        template<typename InputFunctor, bool Abortable, unsigned A,unsigned B, unsigned C,unsigned D>
+        std::uint_least32_t HuffRead(InputFunctor&& input,
+                                     RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,A,B>& tree_table,
+                                     RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,C,D>& tree_trans)
         {
-            huffnode<HuffNodeBits> tmpnode = tree.get(which ? tree.branch1 : tree.branch0);
-            while(tmpnode.GetBranch1())
-            {
+            int sum=0, cur=0, len=0;
+            // Get more bits while code value is above sum
+            do {
                 auto p = GetBits<InputFunctor,Abortable>(std::forward<InputFunctor>(input), 1);
                 if(Abortable && !~p)
                 {
                     // Note: Throws away progress already made traversing the tree
                     return ~std::uint_least32_t(0); // error flag
                 }
-                tmpnode = tree.get(p ? tmpnode.GetBranch1() : tmpnode.GetBranch0());
-            }
-            return tmpnode.GetValue();
+                cur = (unsigned(cur) << 1) | bool(p);
+                auto v = tree_table.Get(++len);
+                sum += v;
+                cur -= v;
+            } while(cur >= 0);
+            return tree_trans.Get(sum + cur);
         }
     };
 
@@ -618,8 +605,8 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
         target = p
 
     // Huffman tree read routine.
-    #define HuffRead(tree, which, target) \
-        auto p = state.HuffRead<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), tree, which); \
+    #define HuffRead(tree_table, tree_trans, target) \
+        auto p = state.HuffRead<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), tree_table,tree_trans); \
         if((Abortable & 1) && !~p) return -2; \
         target = p
 
@@ -665,14 +652,14 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             std::uint_fast64_t lenlens; GetBits(ncode*3, lenlens);  // Max: 19*3 = 57 bits
             for(unsigned a=0; a<ncode; ++a)
                 state.Lengths.QSet(order(a), ((lenlens >> (a*3)) & 7));}
-            state.tables_dyn.Create(0, 19, state.Lengths, 0); // length-lengths
+            CreateHuffmanTree(/*"Len Lengths", */state.dtable, state.dtrans, 19,  state.Lengths, 0); // length-lengths. Size: 19
 
             state.Lengths = {}; // clear at least (nlen+ndist) nibbles; easiest to clear it all
             //state.Lengths.Set<(288+32)*4,true>(0,0);
             std::uint_least8_t lencode = 0;
             for(std::uint_least16_t code = 0; code < nlen+ndist; ) // nlen+ndist is 258..320
             {
-                HuffRead(state.tables_dyn, 0, std::uint_least8_t what); // 0-18
+                HuffRead(state.dtable, state.dtrans, std::uint_least8_t what); // 0-18
 
                 if(!(what & 16))    { lencode = what * 0x11u;           what = 0x01; } // 1 times (what < 16) (use what, set prev)
                 else if(what < 17)  { lencode = (lencode >> 4) * 0x11u; what = 0x23; } // 3..6 (use prev)
@@ -683,14 +670,9 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
                 Fail_If((code+num) > (nlen+ndist));
                 while(num--) { state.Lengths.QSet(code++, lencode & 0xF); }}
             }
-            state.tables_dyn.Create(0, nlen,  state.Lengths, 0);
-            state.tables_dyn.Create(1, ndist, state.Lengths, nlen);
-            assert(state.tables_dyn.used <= PoolSize);
-            // ^If this assertion fails, simply increase PoolSize.
-            // So far the largest value seen in the wild is 630.
-
-            //fprintf(stderr, "pool2 size%5u\n", state.tables_dyn.used);
-            state.cur_table = &state.tables_dyn;
+            CreateHuffmanTree(/*"Dyn Lengths", */state.ltable, state.ltrans, nlen,  state.Lengths, 0);  // size: 257..288
+            CreateHuffmanTree(/*"Dyn Dists", */state.dtable, state.dtrans, ndist, state.Lengths, nlen); // size: 1..32
+            state.fixed_table = false;
             #undef nlen
             #undef ndist
         }
@@ -710,24 +692,22 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
                 }
                 goto skipdef;
             }
-            if(state.cur_table != &state.tables_fixed)
+            if(!state.fixed_table)
             {
                 for(unsigned n=0; n<9; ++n) state.Lengths.template WSet<64>((n*16+0)/16,    0x8888888888888888ull);
                 for(unsigned n=0; n<7; ++n) state.Lengths.template WSet<64>((n*16+0x90)/16, 0x9999999999999999ull);
                 for(unsigned n=0; n<4; ++n) state.Lengths.template WSet<32>((n*8+0x100)/8,  (7+n/3)*0x11111111u);
                 for(unsigned n=0; n<2; ++n) state.Lengths.template WSet<64>((n*16+0x120)/16,0x5555555555555555ull);
-                state.tables_fixed.Create(0, 288, state.Lengths, 0);   // 575 used here
-                state.tables_fixed.Create(1, 32,  state.Lengths, 288); // 63 used here
-                assert(state.tables_fixed.used == 638 && state.tables_fixed.used <= PoolSize);
-                // ^state.tables_fixed has always 638 elements. If this assertion fails,
-                // something is wrong. Maybe coincidentally same as (288+32-1)*2.
-                state.cur_table = &state.tables_fixed;
+
+                CreateHuffmanTree(/*"Stat Lengths", */state.ltable, state.ltrans, 288, state.Lengths, 0);
+                CreateHuffmanTree(/*"Stat Dists", */state.dtable, state.dtrans, 32,  state.Lengths, 288);
+                state.fixed_table = true;
             }
         }
         // Do actual deflating.
         for(;;)
         {
-            HuffRead(*state.cur_table, 0, std::uint_least16_t lencode); // 0..287
+            HuffRead(state.ltable, state.ltrans, std::uint_least16_t lencode); // 0..287
             if(!(lencode & -256)) // 0..255: literal byte
             {
                 while(OutputHelper<bool(Abortable&2)>::output(output, lencode)) { return -3; }
@@ -736,7 +716,7 @@ int Deflate(gunzip_ns::DeflateState<false>& state,
             else // 257..287: length code for backwards reference
             {
                 GetBits(lbits(lencode), std::uint_least16_t length); length += lbase(lencode);
-                {HuffRead(*state.cur_table, 1, std::uint_least8_t distcode); // Read distance code (0..31)
+                {HuffRead(state.dtable, state.dtrans, std::uint_least8_t distcode); // Read distance code (0..31)
                 {GetBits(dbits(distcode), std::uint_least32_t offset); offset += dbase(distcode);
                 while(OutputHelper<bool(Abortable&2)>::outputcopy(outputcopy,length,offset)) { return -4; }}}
             }

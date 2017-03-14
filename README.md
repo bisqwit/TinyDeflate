@@ -6,12 +6,12 @@ that requires minimal amount of memory to work.
 ## Memory usage
 
 * 160 bytes of automatic storage for length tables (320 elements, 4 bits each)
-* 2160 bytes of automatic storage for huffman tree (638 elements, 27 bits each)
-* 51 bytes of temporary automatic storage while a huffman tree is being generated (17 elements, 24 bits each)
+* 384 bytes of automatic storage for huffman tree (352 elements, 5…9 bits each)
+* 24 bytes of temporary automatic storage while a huffman tree is being generated (16 elements, 9 bits each)
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
-Total: 2320 bytes minimum, 2371+N bytes maximum
+Total: 544 bytes minimum, 568+N bytes maximum
 
 In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
@@ -20,11 +20,11 @@ In addition, if you neither decompress into a raw memory area nor supply your ow
 
 If you can afford more RAM, there are three options in gunzip.hh that you can change:
 
-* USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION : Change this to false to use additional 12 bytes of memory for a tiny boost in performance.
+* USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION : Change this to false to use additional 8 bytes of memory for a tiny boost in performance.
 * USE_BITARRAY_FOR_LENGTHS : Change this to false to use additional 160 bytes of memory for a noticeable boost in performance.
-* USE_BITARRAY_FOR_HUFFNODES : Change this to false to use additional 392 bytes of memory for a significant boost in performance.
+* USE_BITARRAY_FOR_HUFFNODES : Change this to false to use additional 256 bytes of memory for a significant boost in performance.
 
-All three settings at 'false' will consume 2940 bytes of automatic memory + alignment losses + callframes + spills.
+All three settings at 'false' will consume 832 bytes of automatic memory + alignment losses + callframes + spills.
 
 ## Unrequirements
 
