@@ -3,11 +3,14 @@
 A deflate/gzip decompressor, as a C++14 template function,
 that requires minimal amount of memory to work.
 
-## Memory usage
+    Terms of use: Zlib    
+    Copyright © 2017 Joel Yliluoma
 
-* 160 bytes of automatic storage for length tables (320 elements, 4 bits each)
-* 384 bytes of automatic storage for huffman tree (352 elements, 5…9 bits each)
-* 24 bytes of temporary automatic storage while a huffman tree is being generated (16 elements, 9 bits each)
+## Memory usage at aggressive settings
+
+* 160 bytes of automatic storage for length tables (320 elements)
+* 384 bytes of automatic storage for huffman tree (352 elements)
+* 24 bytes of temporary automatic storage while a huffman tree is being generated (16 elements)
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
@@ -16,15 +19,29 @@ Total: 544 bytes minimum, 568+N bytes maximum
 In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
 
+## Memory usage at default settings
+
+* 320 bytes of automatic storage for length tables (320 elements)
+* 640 bytes of automatic storage for huffman tree (352 elements)
+* 32 bytes of temporary automatic storage while a huffman tree is being generated (16 elements)
+* An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
+* ABI mandated alignment losses
+
+Total: 960 bytes minimum, 992+N bytes maximum
+
+In addition, if you neither decompress into a raw memory area nor supply your own window function,
+32768 bytes of automatic storage is allocated for the look-behind window.
+
 ## Tuning
 
-If you can afford more RAM, there are three options in gunzip.hh that you can change:
+To adjust the memory usage, there are three settings in gunzip.hh you can change:
 
-* USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION : Change this to false to use additional 8 bytes of memory for a tiny boost in performance.
-* USE_BITARRAY_FOR_LENGTHS : Change this to false to use additional 160 bytes of memory for a noticeable boost in performance.
-* USE_BITARRAY_FOR_HUFFNODES : Change this to false to use additional 256 bytes of memory for a significant boost in performance.
-
-All three settings at 'false' will consume 832 bytes of automatic memory + alignment losses + callframes + spills.
+| Setting name | 'false' memory use bytes | 'true' memory use bytes | 'true' performance impact
+| ------------------------------------------- | ---:| ----:|--------------
+| **USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION** |  32 | 24  | Negligible
+| **USE_BITARRAY_FOR_LENGTHS**                   | 320 | 160 | Noticeable
+| **USE_BITARRAY_FOR_HUFFNODES**                 | 640 | 384 | Significant
+| **Total**                                      | 992 | 568 | _Plus alignment losses, callframes and spills_
 
 ## Unrequirements
 

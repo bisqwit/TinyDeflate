@@ -77,9 +77,9 @@ namespace gunzip_ns
 {
     // If you want more performance at the expense of RAM use,
     // Turn one or more of these settings to false:
-    static constexpr bool USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION = true; /* 8 bytes save */
-    static constexpr bool USE_BITARRAY_FOR_LENGTHS = true;                   /* 160 bytes save */
-    static constexpr bool USE_BITARRAY_FOR_HUFFNODES = true;                 /* 392 bytes save */
+    static constexpr bool USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION = false; /* 8 bytes save */
+    static constexpr bool USE_BITARRAY_FOR_LENGTHS = false;                   /* 160 bytes save */
+    static constexpr bool USE_BITARRAY_FOR_HUFFNODES = false;                 /* 392 bytes save */
     #define DEFLATE_USE_DATA_TABLES
 }
 
