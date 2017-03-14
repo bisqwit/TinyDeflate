@@ -302,8 +302,7 @@ namespace gunzip_ns
     void CreateHuffmanTree(const char* what,
                            RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,A,B>& tree,
                            unsigned num_values,
-                           const RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4>& lengths,
-                           unsigned offset) throw()
+                           const RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288, 4>& lengths) throw()
     {
         //#define DEFL_DO_HUFF_STATS
         constexpr unsigned ElemBits = CeilLog2<A-15>; // ceil(log2(A-15)) where A-15 is max value of num_values
@@ -322,7 +321,7 @@ namespace gunzip_ns
         what=what;
         #endif
         for(unsigned a = 0; a < num_values; ++a)
-            if(std::uint_fast8_t length = lengths.Get(offset+a)) // Note: Can be zero.
+            if(std::uint_fast8_t length = lengths.Get(a)) // Note: Can be zero.
             {
                 unsigned v = tree.Get(0 + length-1)+1;
             #ifdef DEFL_DO_HUFF_STATS
@@ -345,7 +344,7 @@ namespace gunzip_ns
 
         // Create code->symbol translation table (symbols sorted by code)
         for(unsigned value = 0; value < num_values; ++value)
-            if(std::uint_fast8_t length = lengths.Get(offset+value))
+            if(std::uint_fast8_t length = lengths.Get(value))
             {
                 unsigned q = offs.Get(length-1); offs.Set(length-1, q+1); // q = offset[length]++;
         #ifdef DEFL_DO_HUFF_STATS
@@ -375,8 +374,8 @@ namespace gunzip_ns
     struct DeflateState
     {
         // Lengths are in 0..15 range.
-        // 160 bytes are allocated.
-        RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, CeilLog2<16>> Lengths;
+        // 144 bytes are allocated.
+        RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288, CeilLog2<16>> Lengths;
 
         // Length tree
         //   Values up to 288 in indexes 0-14.   (Table)  (255 is max observed in wild)
@@ -717,18 +716,17 @@ int Deflate(gunzip_ns::DeflateState& state,
             #define nlen  (((nlen_ndist_ncode >> 0u) & 0x1Fu) + 257u) // 257..288
             #define ndist (((nlen_ndist_ncode >> 5u) & 0x1Fu) + 1u)   // 1..32
 
-            {state.Lengths.template WSet<(19*4 + 63) & ~63>(0, 0); // 19 needed, but round to nice unit
             std::uint_least8_t ncode = ((nlen_ndist_ncode >> 10u) + 4u); // 4..19
-            std::uint_fast64_t lenlens; GetBits(ncode*3, lenlens);  // Max: 19*3 = 57 bits
+            {std::uint_fast64_t lenlens; GetBits(ncode*3, lenlens);  // Max: 19*3 = 57 bits
+            state.Lengths.template WSet<(19*4 + 63) & ~63>(0, 0);  // ncode needed, but round to nice unit
             for(unsigned a=0; a<ncode; ++a)
                 state.Lengths.QSet(order(a), ((lenlens >> (a*3)) & 7));}
-            CreateHuffmanTree("Len Lengths", state.dtree, 19,  state.Lengths, 0); // length-lengths. Size: 19
+            CreateHuffmanTree("Len Lengths", state.dtree, 19, state.Lengths); // length-lengths. Size: 19
 
-            state.Lengths = {}; // clear at least (nlen+ndist) nibbles; easiest to clear it all
-            //state.Lengths.Set<(288+32)*4,true>(0,0);
+            state.Lengths = {}; // clear at least nlen nibbles; easiest to clear it all
             std::uint_least8_t lencode = 0;
-            for(std::uint_least16_t code = 0; code < nlen+ndist; ) // nlen+ndist is 258..320
-            {
+            std::uint_least16_t code = 0, remain = nlen+ndist; // nlen+ndist is 258..320
+            do {
                 HuffRead(state.dtree, std::uint_least8_t what); // 0-18
 
                 if(!(what & 16))    { lencode = what * 0x11u;           what = 0x01; } // 1 times (what < 16) (use what, set prev)
@@ -737,11 +735,20 @@ int Deflate(gunzip_ns::DeflateState& state,
                 else                { lencode &= 0xF0;                  what = 0x7B; } // 11..138 (use 0)
                 {GetBits(what >> 4, std::uint_least8_t num); num += (what & 0xF);
 
-                Fail_If((code+num) > (nlen+ndist));
-                while(num--) { state.Lengths.QSet(code++, lencode & 0xF); }}
-            }
-            CreateHuffmanTree("Dyn Lengths", state.ltree, nlen,  state.Lengths, 0);  // size: 257..288
-            CreateHuffmanTree("Dyn Dists", state.dtree, ndist, state.Lengths, nlen); // size: 1..32
+                Fail_If(num > remain);
+                remain -= num;
+                while(num--)
+                {
+                    if(code == nlen) // nlen is > ndist, so this is only matched once
+                    {
+                        CreateHuffmanTree("Dyn Lengths", state.ltree, nlen, state.Lengths);  // size: 257..288
+                        state.Lengths.template WSet<(32*4 + 63) & ~63>(0,0); // ndist needed, but round to nice unit
+                        code = 0;
+                    }
+                    state.Lengths.QSet(code++, lencode & 0xF);
+                }}
+            } while(remain > 0);
+            CreateHuffmanTree("Dyn Dists", state.dtree, ndist, state.Lengths); // size: 1..32
             state.fixed_table = false;
             #undef nlen
             #undef ndist
@@ -767,10 +774,12 @@ int Deflate(gunzip_ns::DeflateState& state,
                 for(unsigned n=0; n<9; ++n) state.Lengths.template WSet<64>((n*16+0)/16,    0x8888888888888888ull);
                 for(unsigned n=0; n<7; ++n) state.Lengths.template WSet<64>((n*16+0x90)/16, 0x9999999999999999ull);
                 for(unsigned n=0; n<4; ++n) state.Lengths.template WSet<32>((n*8+0x100)/8,  (7+n/3)*0x11111111u);
-                for(unsigned n=0; n<2; ++n) state.Lengths.template WSet<64>((n*16+0x120)/16,0x5555555555555555ull);
 
-                CreateHuffmanTree("Stat Lengths", state.ltree, 288, state.Lengths, 0);
-                CreateHuffmanTree("Stat Dists", state.dtree, 32,  state.Lengths, 288);
+                CreateHuffmanTree("Stat Lengths", state.ltree, 288, state.Lengths);
+
+                for(unsigned n=0; n<2; ++n) state.Lengths.template WSet<64>((n*16+0)/16,    0x5555555555555555ull);
+
+                CreateHuffmanTree("Stat Dists", state.dtree, 32, state.Lengths);
                 state.fixed_table = true;
             }
         }

@@ -8,26 +8,28 @@ that requires minimal amount of memory to work.
 
 ## Memory usage at aggressive settings
 
-* 160 bytes of automatic storage for length tables (320 elements, 4 bits each)
-* 384 bytes of automatic storage for huffman tree (352 elements, 5…9 bits each)
-* 24 bytes of temporary automatic storage while a huffman tree is being generated (16 elements, 9 bits each)
+* 144 bytes of automatic storage for length tables (288 elements, 4 bits each, 100 % space efficiency)
+* 384 bytes of automatic storage for huffman tree (352 elements, 5…9 bits each, 88 % space efficiency)
+* 24 bytes of temporary automatic storage while a huffman tree is being generated (15 elements, 9 bits each, 66 % space efficiency)
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
-Total: 544 bytes minimum, 568+N bytes maximum
+Total: 528 bytes minimum, 552+N bytes maximum
 
 In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
 
+Theoretical minimum at 100 % efficiency: 144 + 338.9 + 15.32 ≃ 499 bytes (not yet attained by this library).
+
 ## Memory usage at default settings
 
-* 320 bytes of automatic storage for length tables
-* 653 bytes of automatic storage for huffman tree
-* 30 bytes of temporary automatic storage while a huffman tree is being generated
+* 288 bytes of automatic storage for length tables (50 % space efficiency)
+* 653 bytes of automatic storage for huffman tree (52 % space efficiency)
+* 30 bytes of temporary automatic storage while a huffman tree is being generated (53 % space efficiency)
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
-Total: 973 bytes minimum, 1003+N bytes maximum
+Total: 941 bytes minimum, 971+N bytes maximum
 
 In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
@@ -39,9 +41,9 @@ To adjust the memory usage, there are three settings in gunzip.hh you can change
 | Setting name | 'false' memory use bytes | 'true' memory use bytes | 'true' performance impact
 | ------------------------------------------- | ---:| ----:|--------------
 | **USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION** |  30 | 24  | Negligible
-| **USE_BITARRAY_FOR_LENGTHS**                   | 320 | 160 | Noticeable
+| **USE_BITARRAY_FOR_LENGTHS**                   | 288 | 144 | Noticeable
 | **USE_BITARRAY_FOR_HUFFNODES**                 | 653 | 384 | Significant
-| **Total**                                      |1003 | 568 | _Plus alignment losses, callframes and spills_
+| **Total**                                      | 971 | 552 | _Plus alignment losses, callframes and spills_
 
 ## Unrequirements
 
