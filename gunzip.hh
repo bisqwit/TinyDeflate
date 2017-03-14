@@ -131,14 +131,14 @@ namespace gunzip_ns
 #define DeflReturnType std::result_of_t<gunzip_ns::SizeTracker<SizeTrackTag>(int)>
 
 
-// RandomAccessBitArray: An engine for arrays of data items that are smaller than a byte
+// RandomAccessBitArray: An engine for arrays of data items that are not byte-aligned
 template<typename U = std::uint_least64_t>
 struct RandomAccessBitArrayBase
 {
+private:
     static constexpr unsigned Ubytes = sizeof(U), Ubits = Ubytes*8;
 
-    template<unsigned Size>
-    static std::uint_fast64_t Get(const U* data, unsigned index) throw()
+    static std::uint_fast64_t Get_Unclean(unsigned Size, const U* data, unsigned index) throw()
     {
         unsigned bitpos = index*Size, unitpos = bitpos / Ubits, shift = bitpos % Ubits;
         std::uint_fast64_t result = data[unitpos] >> shift;
@@ -148,6 +148,13 @@ struct RandomAccessBitArrayBase
         {
             result += (std::uint_fast64_t)data[++unitpos] << acquired;
         }
+        return result;
+    }
+public:
+    template<unsigned Size>
+    static std::uint_fast64_t Get(const U* data, unsigned index) throw()
+    {
+        std::uint_fast64_t result = Get_Unclean(Size,data,index);
         return (Size >= sizeof(result)*8) ? result : (result & ((std::uint64_t(1) << Size)-1));
     }
 
@@ -211,13 +218,13 @@ struct RandomAccessBitArray
     U data[Nunits];
 
     template<unsigned Size>
-    inline std::uint_fast64_t Get(unsigned index) const
+    inline std::uint_fast64_t Get(unsigned index) const throw()
     {
         return RandomAccessBitArrayBase<U>::template Get<Size>(data, index);
     }
 
     template<unsigned Size, bool update = false>
-    inline void Set(unsigned index, std::uint_fast64_t value)
+    inline void Set(unsigned index, std::uint_fast64_t value) throw()
     {
         RandomAccessBitArrayBase<U>::template Set<Size,update>(data, index, value);
     }
@@ -264,7 +271,7 @@ namespace gunzip_ns
     {
         RandomAccessBitArray<Dim*Elem> impl;
         inline std::uint_fast64_t Get(unsigned index) const { return impl.template Get<Elem>(index); }
-        inline void Set(unsigned index, std::uint_fast32_t value) { impl.template Set<Elem,true>(index, value); }
+        inline void Set(unsigned index, std::uint_fast32_t value)  { impl.template Set<Elem,true>(index, value); }
         inline void QSet(unsigned index, std::uint_fast32_t value) { impl.template Set<Elem,false>(index, value); }
         template<unsigned Bits>
         inline void WSet(unsigned index, std::uint_fast64_t value) { impl.template Set<Bits,true>(index, value); }
@@ -275,8 +282,8 @@ namespace gunzip_ns
     {
         typedef SmallestType<Elem> E;
         E data[Dim];
-        inline E Get(unsigned index) const       { return data[index]; }
-        inline void Set(unsigned index, E value) { data[index] = value; }
+        inline E Get(unsigned index) const        { return data[index]; }
+        inline void Set(unsigned index, E value)  { data[index] = value; }
         inline void QSet(unsigned index, E value) { data[index] = value; }
         template<unsigned Bits>
         inline void WSet(unsigned index, std::uint_fast64_t value)
