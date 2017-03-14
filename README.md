@@ -9,12 +9,12 @@ that requires minimal amount of memory to work.
 ## Memory usage at aggressive settings
 
 * 160 bytes of automatic storage for length tables (320 elements, 4 bits each)
-* 392 bytes of automatic storage for huffman tree (352 elements, 5…9 bits each)
+* 384 bytes of automatic storage for huffman tree (352 elements, 5…9 bits each)
 * 24 bytes of temporary automatic storage while a huffman tree is being generated (16 elements, 9 bits each)
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
-Total: 552 bytes minimum, 576+N bytes maximum
+Total: 544 bytes minimum, 568+N bytes maximum
 
 In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
@@ -23,11 +23,11 @@ In addition, if you neither decompress into a raw memory area nor supply your ow
 
 * 320 bytes of automatic storage for length tables
 * 653 bytes of automatic storage for huffman tree
-* 32 bytes of temporary automatic storage while a huffman tree is being generated
+* 30 bytes of temporary automatic storage while a huffman tree is being generated
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
-Total: 973 bytes minimum, 1005+N bytes maximum
+Total: 973 bytes minimum, 1003+N bytes maximum
 
 In addition, if you neither decompress into a raw memory area nor supply your own window function,
 32768 bytes of automatic storage is allocated for the look-behind window.
@@ -38,10 +38,10 @@ To adjust the memory usage, there are three settings in gunzip.hh you can change
 
 | Setting name | 'false' memory use bytes | 'true' memory use bytes | 'true' performance impact
 | ------------------------------------------- | ---:| ----:|--------------
-| **USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION** |  32 | 24  | Negligible
+| **USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION** |  30 | 24  | Negligible
 | **USE_BITARRAY_FOR_LENGTHS**                   | 320 | 160 | Noticeable
-| **USE_BITARRAY_FOR_HUFFNODES**                 | 653 | 392 | Significant
-| **Total**                                      |1005 | 576 | _Plus alignment losses, callframes and spills_
+| **USE_BITARRAY_FOR_HUFFNODES**                 | 653 | 384 | Significant
+| **Total**                                      |1003 | 568 | _Plus alignment losses, callframes and spills_
 
 ## Unrequirements
 

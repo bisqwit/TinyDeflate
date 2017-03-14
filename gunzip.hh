@@ -298,24 +298,21 @@ namespace gunzip_ns
 
 namespace gunzip_ns
 {
-    template<unsigned A,unsigned B, unsigned C,unsigned D>
+    template<unsigned A,unsigned B>
     void CreateHuffmanTree(const char* what,
-                           RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,A,B>& tree_table,
-                           RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,C,D>& tree_trans,
+                           RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,A,B>& tree,
                            unsigned num_values,
                            const RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, 4>& lengths,
                            unsigned offset) throw()
     {
         //#define DEFL_DO_HUFF_STATS
-        constexpr unsigned ElemBits = D; // ceil(log2(C)) where C is max value of num_values
-        static_assert((1u << D) >= C,     "D is too small");
-        static_assert(A >= 15 && A <= 16, "A is too small");
-        static_assert((1u << B) >= C,     "B is too small");
+        constexpr unsigned ElemBits = CeilLog2<A-15>; // ceil(log2(A-15)) where A-15 is max value of num_values
+        static_assert((1u << B) >= (A-15), "B is too small");
         /*assert(num_values <= C);*/
 
-        RandomAccessArray<USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION, 15, ElemBits> offs{}; // 24 or 16 bytes.
+        RandomAccessArray<USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION, 15, ElemBits> offs; // 24 or 16 bytes.
         // Clear code length count table
-        tree_table = {};
+        tree.template WSet<(15*B + 63) & ~63>(0, 0); // First 15 needed, but round to nice unit
         // Scan symbol length, and sum code length counts
         #ifdef DEFL_DO_HUFF_STATS
         unsigned largest_treetable_value = 0, largest_offs = 0, smallest_treetable_value = ~0u;
@@ -327,23 +324,23 @@ namespace gunzip_ns
         for(unsigned a = 0; a < num_values; ++a)
             if(std::uint_fast8_t length = lengths.Get(offset+a)) // Note: Can be zero.
             {
-                unsigned v = tree_table.Get(length-1)+1;
+                unsigned v = tree.Get(0 + length-1)+1;
             #ifdef DEFL_DO_HUFF_STATS
                 largest_treetable_value = std::max(largest_treetable_value, v);
                 longest_length          = std::max(longest_length, unsigned(length));
             #endif
-                tree_table.Set(length-1, v);
+                tree.Set(0 + length-1, v);
             }
 
         // Compute offset table for distribution sort
         for(unsigned sum=0, a = 1; a < 16; ++a)
         {
             offs.Set(a-1, sum);
-            sum += tree_table.Get(a-1);
+            sum += tree.Get(0 + a-1);
         }
         #ifdef DEFL_DO_HUFF_STATS
         for(unsigned a=1; a<=longest_length; ++a)
-            smallest_treetable_value = std::min(smallest_treetable_value, (unsigned)tree_table.Get(a-1));
+            smallest_treetable_value = std::min(smallest_treetable_value, (unsigned)tree.Get(0 + a-1));
         #endif
 
         // Create code->symbol translation table (symbols sorted by code)
@@ -357,7 +354,7 @@ namespace gunzip_ns
                 largest_treetrans_value = std::max(largest_treetrans_value, value);
         #endif
                 assert(q < num_values && value < num_values);
-                tree_trans.Set(q, value);
+                tree.Set(15 + q, value);
             }
         #ifdef DEFL_DO_HUFF_STATS
         std::fprintf(stderr, "Largest \"%12s\"(treetable_value=%4u..%4u, offs=%4u, treetrans_index=%4u, treetrans_value=%4u)\n",
@@ -377,18 +374,21 @@ namespace gunzip_ns
 
     struct DeflateState
     {
-        RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, CeilLog2<16>> Lengths; // Lengths are in 0..15 range. 160 bytes are allocated.
+        // Lengths are in 0..15 range.
+        // 160 bytes are allocated.
+        RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288+32, CeilLog2<16>> Lengths;
 
         // Length tree
-        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,288, CeilLog2<288>> ltrans; // Values up to 287 in indexes 0-287. 328 bytes allocated.
-        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 15, CeilLog2<289>> ltable; // Values up to 255 in indexes 0-14.  24 bytes allocated.
-        //                                                                       // Technically, values could be up to 288.
+        //   Values up to 288 in indexes 0-14.   (Table)  (255 is max observed in wild)
+        //   Values up to 287 in indexes 15-302. (Trans)
+        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 15+288, CeilLog2<289>> ltree;
         // Distance tree
-        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 32, CeilLog2<32>> dtrans;  // Values up to 31 in indexes 0-31. 24 bytes allocated.
-        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 15, CeilLog2<33>> dtable;  // Values up to 32 in indexes 0-14. 16 bytes allocated.
+        //   Values up to 32 in indexes 0-14.  (Table)
+        //   Values up to 31 in indexes 15-46. (Trans)
+        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 15+32, CeilLog2<33>> dtree;
 
         // Theoretical minimum memory use:
-        //   ceil((15*log2(288) + 288*log2(288) + 15*log2(33) + 32*log2(32))/8) = 339 bytes. We use 392 bytes.
+        //   ceil((15*log2(289) + 288*log2(288) + 15*log2(33) + 32*log2(32))/8) = 339 bytes. We use 384 bytes.
         std::uint_least8_t BitCache = 0, BitCount = 0;
         bool fixed_table = false;
 
@@ -424,10 +424,9 @@ namespace gunzip_ns
             }
         }
 
-        template<typename InputFunctor, bool Abortable, unsigned A,unsigned B, unsigned C,unsigned D>
+        template<typename InputFunctor, bool Abortable, unsigned A,unsigned B>
         std::uint_least32_t HuffRead(InputFunctor&& input,
-                                     RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,A,B>& tree_table,
-                                     RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,C,D>& tree_trans)
+                                     RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,A,B>& tree)
         {
             int sum=0, cur=0, len=0;
             #ifdef DEFL_DO_HUFF_STATS
@@ -446,14 +445,14 @@ namespace gunzip_ns
                 if(len > maxlen)
                 {
                     maxlen = len;
-                    std::fprintf(stderr, "maxlen access: %d (%d)\n", maxlen, (int)tree_table.Get(len));
+                    std::fprintf(stderr, "maxlen access: %d (%d)\n", maxlen, (int)tree.Get(0 + len));
                 }
             #endif
-                auto v = tree_table.Get(len++);
+                auto v = tree.Get(0 + len++);
                 sum += v;
                 cur -= v;
             } while(cur >= 0);
-            return tree_trans.Get(sum + cur);
+            return tree.Get(15 + sum + cur);
         }
     };
 
@@ -676,8 +675,8 @@ int Deflate(gunzip_ns::DeflateState& state,
         target = p
 
     // Huffman tree read routine.
-    #define HuffRead(tree_table, tree_trans, target) \
-        auto p = state.HuffRead<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), tree_table,tree_trans); \
+    #define HuffRead(tree, target) \
+        auto p = state.HuffRead<InputFunctor,bool(Abortable&1)>(std::forward<InputFunctor>(input), tree); \
         if((Abortable & 1) && !~p) return -2; \
         target = p
 
@@ -718,19 +717,19 @@ int Deflate(gunzip_ns::DeflateState& state,
             #define nlen  (((nlen_ndist_ncode >> 0u) & 0x1Fu) + 257u) // 257..288
             #define ndist (((nlen_ndist_ncode >> 5u) & 0x1Fu) + 1u)   // 1..32
 
-            {state.Lengths.template WSet<32*4>(0, 0); // 19 needed, but round to nice unit
+            {state.Lengths.template WSet<(19*4 + 63) & ~63>(0, 0); // 19 needed, but round to nice unit
             std::uint_least8_t ncode = ((nlen_ndist_ncode >> 10u) + 4u); // 4..19
             std::uint_fast64_t lenlens; GetBits(ncode*3, lenlens);  // Max: 19*3 = 57 bits
             for(unsigned a=0; a<ncode; ++a)
                 state.Lengths.QSet(order(a), ((lenlens >> (a*3)) & 7));}
-            CreateHuffmanTree("Len Lengths", state.dtable, state.dtrans, 19,  state.Lengths, 0); // length-lengths. Size: 19
+            CreateHuffmanTree("Len Lengths", state.dtree, 19,  state.Lengths, 0); // length-lengths. Size: 19
 
             state.Lengths = {}; // clear at least (nlen+ndist) nibbles; easiest to clear it all
             //state.Lengths.Set<(288+32)*4,true>(0,0);
             std::uint_least8_t lencode = 0;
             for(std::uint_least16_t code = 0; code < nlen+ndist; ) // nlen+ndist is 258..320
             {
-                HuffRead(state.dtable, state.dtrans, std::uint_least8_t what); // 0-18
+                HuffRead(state.dtree, std::uint_least8_t what); // 0-18
 
                 if(!(what & 16))    { lencode = what * 0x11u;           what = 0x01; } // 1 times (what < 16) (use what, set prev)
                 else if(what < 17)  { lencode = (lencode >> 4) * 0x11u; what = 0x23; } // 3..6 (use prev)
@@ -741,8 +740,8 @@ int Deflate(gunzip_ns::DeflateState& state,
                 Fail_If((code+num) > (nlen+ndist));
                 while(num--) { state.Lengths.QSet(code++, lencode & 0xF); }}
             }
-            CreateHuffmanTree("Dyn Lengths", state.ltable, state.ltrans, nlen,  state.Lengths, 0);  // size: 257..288
-            CreateHuffmanTree("Dyn Dists", state.dtable, state.dtrans, ndist, state.Lengths, nlen); // size: 1..32
+            CreateHuffmanTree("Dyn Lengths", state.ltree, nlen,  state.Lengths, 0);  // size: 257..288
+            CreateHuffmanTree("Dyn Dists", state.dtree, ndist, state.Lengths, nlen); // size: 1..32
             state.fixed_table = false;
             #undef nlen
             #undef ndist
@@ -770,15 +769,15 @@ int Deflate(gunzip_ns::DeflateState& state,
                 for(unsigned n=0; n<4; ++n) state.Lengths.template WSet<32>((n*8+0x100)/8,  (7+n/3)*0x11111111u);
                 for(unsigned n=0; n<2; ++n) state.Lengths.template WSet<64>((n*16+0x120)/16,0x5555555555555555ull);
 
-                CreateHuffmanTree("Stat Lengths", state.ltable, state.ltrans, 288, state.Lengths, 0);
-                CreateHuffmanTree("Stat Dists", state.dtable, state.dtrans, 32,  state.Lengths, 288);
+                CreateHuffmanTree("Stat Lengths", state.ltree, 288, state.Lengths, 0);
+                CreateHuffmanTree("Stat Dists", state.dtree, 32,  state.Lengths, 288);
                 state.fixed_table = true;
             }
         }
         // Do actual deflating.
         for(;;)
         {
-            HuffRead(state.ltable, state.ltrans, std::uint_least16_t lencode); // 0..287
+            HuffRead(state.ltree, std::uint_least16_t lencode); // 0..287
             if(!(lencode & -256)) // 0..255: literal byte
             {
                 while(OutputHelper<bool(Abortable&2)>::output(output, lencode)) { return -3; }
@@ -787,7 +786,7 @@ int Deflate(gunzip_ns::DeflateState& state,
             else // 257..287: length code for backwards reference
             {
                 GetBits(lbits(lencode), std::uint_least16_t length); length += lbase(lencode);
-                {HuffRead(state.dtable, state.dtrans, std::uint_least8_t distcode); // Read distance code (0..31)
+                {HuffRead(state.dtree, std::uint_least8_t distcode); // Read distance code (0..31)
                 {GetBits(dbits(distcode), std::uint_least32_t offset); offset += dbase(distcode);
                 while(OutputHelper<bool(Abortable&2)>::outputcopy(outputcopy,length,offset)) { return -4; }}}
             }
