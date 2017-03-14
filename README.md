@@ -8,9 +8,9 @@ that requires minimal amount of memory to work.
 
 ## Memory usage at aggressive settings
 
-* 160 bytes of automatic storage for length tables (320 elements)
-* 384 bytes of automatic storage for huffman tree (352 elements)
-* 24 bytes of temporary automatic storage while a huffman tree is being generated (16 elements)
+* 160 bytes of automatic storage for length tables (320 elements, 4 bits each)
+* 384 bytes of automatic storage for huffman tree (352 elements, 5…9 bits each)
+* 24 bytes of temporary automatic storage while a huffman tree is being generated (16 elements, 9 bits each)
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
@@ -21,9 +21,9 @@ In addition, if you neither decompress into a raw memory area nor supply your ow
 
 ## Memory usage at default settings
 
-* 320 bytes of automatic storage for length tables (320 elements)
-* 640 bytes of automatic storage for huffman tree (352 elements)
-* 32 bytes of temporary automatic storage while a huffman tree is being generated (16 elements)
+* 320 bytes of automatic storage for length tables
+* 640 bytes of automatic storage for huffman tree
+* 32 bytes of temporary automatic storage while a huffman tree is being generated
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
@@ -377,3 +377,15 @@ Same as above, but stop decompressing once 4096 bytes have been written:
                  return length;
             });
 ```
+
+## Misnomer
+
+Yes, I am aware that the project is technically named misleadingly.
+This project implements the _inflate_ algorithm (decompression),
+not _deflate_ (compression).
+
+In my defense, the _compression format_ is called deflate. There is no _inflate_ format.
+This library decompresses data that has been compressed with _deflate_.
+
+Think name, not verb.
+
