@@ -63,6 +63,7 @@ To adjust the memory usage, there are three settings in gunzip.hh you can change
 * Decompressor only. Deflate and GZIP streams are supported.
 * Slower than your average inflate function. The template uses densely bitpacked arrays, which require plenty of bit-shifting operations for every access.
 * The code obviously performs best on 32-bit or 64-bit platforms. Platforms where 32-bit entities must be synthesized from a number of 8-bit entities are at a disadvantage.
+* Decompressed data integrity is not verified. Any checksum fields are totally ignored.
 
 ## Definitions
 
