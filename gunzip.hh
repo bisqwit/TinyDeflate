@@ -86,7 +86,15 @@ namespace gunzip_ns
     static_assert(MAX_WINDOW_SIZE >= 2,      "Max window size should be >= 2");
     static_assert(MAX_WINDOW_SIZE <= 32768u, "Window sizes larger than 32768 are not supported by deflate standard. Edit the source code to remove this assert if you need it.");
 
+    // 
     #define DEFLATE_USE_DATA_TABLES
+
+    #if !defined(DEFLATE_ALLOCATION_AUTOMATIC) && !defined(DEFLATE_ALLOCATION_STATIC) && !defined(DEFLATE_ALLOCATION_DYNAMIC)
+    // Choose one:
+    #define DEFLATE_ALLOCATION_AUTOMATIC
+    //#define DEFLATE_ALLOCATION_STATIC
+    //#define DEFLATE_ALLOCATION_DYNAMIC
+    #endif
 }
 
 #define DeflIsInputFunctor  (std::is_convertible<std::result_of_t<std::decay_t<InputFunctor>()>,int>::value /*\
@@ -130,6 +138,10 @@ namespace gunzip_ns
                                  (2* std::is_convertible<std::decay_t<std::result_of_t<WindowFunctor(int,int)>>, int>::value)
 #define DeflReturnType std::result_of_t<gunzip_ns::SizeTracker<SizeTrackTag>(int)>
 
+
+#ifdef DEFLATE_ALLOCATION_DYNAMIC
+# include <memory>
+#endif
 
 // RandomAccessBitArray: An engine for arrays of data items that are not byte-aligned
 template<typename U = std::uint_least64_t>
@@ -636,6 +648,23 @@ namespace gunzip_ns
         typedef std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>> result;
         inline result operator() (int returncode) const { return result{returncode,std::make_pair(insize,outsize)}; }
     };
+
+    #ifdef DEFLATE_ALLOCATION_STATIC
+    template<bool=0>
+    gunzip_ns::DeflateState& GetState()
+    {
+        static thread_local gunzip_ns::DeflateState state;
+        state.~DeflateState();
+        new(&state) DeflateState();
+        return state;
+    }
+    template<bool=0>
+    gunzip_ns::DeflateWindow& GetWindow()
+    {
+        static thread_local gunzip_ns::DeflateWindow window;
+        return window;
+    }
+    #endif
 }//ns
 
 /* Values of Abortable:
@@ -815,7 +844,15 @@ template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor, 
 std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindowFunctor && DeflIsTrackTag, DeflReturnType>
     Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy, SizeTrackTag = {})
 {
+#ifdef DEFLATE_ALLOCATION_AUTOMATIC
     gunzip_ns::DeflateState state;
+#elif defined(DEFLATE_ALLOCATION_STATIC)
+    auto& state = gunzip_ns::GetState<>();
+#elif defined(DEFLATE_ALLOCATION_DYNAMIC)
+    std::unique_ptr<gunzip_ns::DeflateState> stateptr(new gunzip_ns::DeflateState);
+    auto& state = *stateptr;
+#endif
+
     gunzip_ns::SizeTracker<SizeTrackTag> tracker;
 
     // For output to be abortable, both the output functor and window functor must have return types.
@@ -833,9 +870,18 @@ std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsTrackTag, De
     Deflate(InputFunctor&& input, OutputFunctor&& output, SizeTrackTag = {})
 {
     // Using a library-supplied output window. OutputFunctor will be wrapped.
-
+#ifdef DEFLATE_ALLOCATION_AUTOMATIC
     gunzip_ns::DeflateState state;
     gunzip_ns::DeflateWindow window;
+#elif defined(DEFLATE_ALLOCATION_STATIC)
+    auto& state  = gunzip_ns::GetState<>();
+    auto& window = gunzip_ns::GetWindow<>();
+#elif defined(DEFLATE_ALLOCATION_DYNAMIC)
+    std::unique_ptr<std::pair<gunzip_ns::DeflateState, gunzip_ns::DeflateWindow>> dataptr
+        (new std::pair<gunzip_ns::DeflateState, gunzip_ns::DeflateWindow>);
+    auto& state  = dataptr->first;
+    auto& window = dataptr->second;
+#endif
     gunzip_ns::SizeTracker<SizeTrackTag> tracker;
 
     constexpr unsigned char Abortable = DeflInputAbortable_InputFunctor

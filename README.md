@@ -40,14 +40,28 @@ To adjust the memory usage, there are three settings in gunzip.hh you can change
 
 | Setting name | 'false' memory use bytes | 'true' memory use bytes | 'true' performance impact
 | ------------------------------------------- | ---:| ----:|--------------
-| **USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION** |  30 | 24  | Negligible
-| **USE_BITARRAY_FOR_LENGTHS**                   | 288 | 144 | Noticeable
-| **USE_BITARRAY_FOR_HUFFNODES**                 | 653 | 384 | Significant
+| `USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION` |  30 | 24  | Negligible
+| `USE_BITARRAY_FOR_LENGTHS`                   | 288 | 144 | Noticeable
+| `USE_BITARRAY_FOR_HUFFNODES`                 | 653 | 384 | Significant
 | **Total**                                      | 971 | 552 | _Plus alignment losses, callframes and spills_
+
+You can also change the memory allocation scheme:
+
+| `#define` name | Meaning
+| --- | ---
+| `DEFLATE_ALLOCATION_AUTOMATIC` | Automatic allocation (usually stack)
+| `DEFLATE_ALLOCATION_STATIC`    | Static `thread_local` allocation (memory remains allocated throughout the program, and different threads have their own copy of the data). Note that this scheme excludes running multiple decompressions in parallel, unless you do it in different threads.
+| `DEFLATE_ALLOCATION_DYNAMIC`   | Storage duration is the same as with automatic allocation, but the `new` keyword is explicitly used (which usually means heap/bss allocation).
+
+There is also a constant `MAX_WINDOW_SIZE`, which is 32768 by default,
+but you can reduce it to use less memory for the automatically allocated
+window in situations where one is allocated (see note 9 below).
+Note that this value must not be smaller than the maximum backreference
+distance used by your compressed data.
 
 ## Unrequirements
 
-* No dynamic memory is allocated under any circumstances, unless your user-supplied functors do it.
+* No dynamic memory is allocated under any circumstances, unless your user-supplied functors do it, or you `#define DEFLATE_ALLOCATION_DYNAMIC`.
 * Aside from assert() in assert.h and some template metaprogramming tools in type_traits, no standard library functions are used.
 * No global variables.
 * Compatible with -fno-exceptions -fno-rtti compilation.
@@ -64,7 +78,7 @@ To adjust the memory usage, there are three settings in gunzip.hh you can change
 * Slower than your average inflate function. The template uses densely bitpacked arrays, which require plenty of bit-shifting operations for every access.
 * The code obviously performs best on 32-bit or 64-bit platforms. Platforms where 32-bit entities must be synthesized from a number of 8-bit entities are at a disadvantage.
 * Decompressed data integrity is not verified. Any checksum fields are totally ignored.
-* On most systems, automatic storage means ‘stack allocation’. Depending on your circumstances, you may want to add a `static` (and maybe `thread_local`) into `gunzip_ns::DeflateState state;` to use static allocation instead. Or, use `std::unique_ptr` to change it into dynamic allocation.
+* On most systems, automatic storage means ‘stack allocation’. Depending on your circumstances, you may want to change the memory allocation scheme. See the Tuning chapter for details.
 
 ## Definitions
 
