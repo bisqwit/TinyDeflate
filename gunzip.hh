@@ -311,7 +311,7 @@ namespace gunzip_ns
 namespace gunzip_ns
 {
     template<unsigned A,unsigned B>
-    void CreateHuffmanTree(const char* what,
+    void CreateHuffmanTree(const char* why,
                            RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES,A,B>& tree,
                            unsigned num_values,
                            const RandomAccessArray<USE_BITARRAY_FOR_LENGTHS, 288, 4>& lengths) throw()
@@ -330,7 +330,7 @@ namespace gunzip_ns
         unsigned largest_treetrans_index=0, largest_treetrans_value=0;
         unsigned longest_length = 0;
         #else
-        what=what;
+        why=why;
         #endif
         for(unsigned a = 0; a < num_values; ++a)
             if(std::uint_fast8_t length = lengths.Get(a)) // Note: Can be zero.
@@ -369,7 +369,7 @@ namespace gunzip_ns
             }
         #ifdef DEFL_DO_HUFF_STATS
         std::fprintf(stderr, "Largest \"%12s\"(treetable_value=%4u..%4u, offs=%4u, treetrans_index=%4u, treetrans_value=%4u)\n",
-            what, smallest_treetable_value,largest_treetable_value,
+            why, smallest_treetable_value,largest_treetable_value,
             largest_offs, largest_treetrans_index, largest_treetrans_value);
         #endif
 
@@ -752,7 +752,7 @@ int Deflate(gunzip_ns::DeflateState& state,
                 state.Lengths.QSet(order(a), ((lenlens >> (a*3)) & 7));}
             CreateHuffmanTree("Len Lengths", state.dtree, 19, state.Lengths); // length-lengths. Size: 19
 
-            state.Lengths = {}; // clear at least nlen nibbles; easiest to clear it all
+            if(USE_BITARRAY_FOR_LENGTHS) state.Lengths = {}; // clear at least nlen nibbles; easiest to clear it all
             std::uint_least8_t lencode = 0;
             std::uint_least16_t code = 0, remain = nlen+ndist; // nlen+ndist is 258..320
             do {
@@ -771,7 +771,8 @@ int Deflate(gunzip_ns::DeflateState& state,
                     if(code == nlen) // nlen is > ndist, so this is only matched once
                     {
                         CreateHuffmanTree("Dyn Lengths", state.ltree, nlen, state.Lengths);  // size: 257..288
-                        state.Lengths.template WSet<(32*4 + 63) & ~63>(0,0); // ndist needed, but round to nice unit
+                        if(USE_BITARRAY_FOR_LENGTHS)
+                            state.Lengths.template WSet<(32*4 + 63) & ~63>(0,0); // ndist needed, but round to nice unit
                         code = 0;
                     }
                     state.Lengths.QSet(code++, lencode & 0xF);
