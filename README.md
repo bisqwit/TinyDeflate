@@ -64,6 +64,7 @@ To adjust the memory usage, there are three settings in gunzip.hh you can change
 * Slower than your average inflate function. The template uses densely bitpacked arrays, which require plenty of bit-shifting operations for every access.
 * The code obviously performs best on 32-bit or 64-bit platforms. Platforms where 32-bit entities must be synthesized from a number of 8-bit entities are at a disadvantage.
 * Decompressed data integrity is not verified. Any checksum fields are totally ignored.
+* On most systems, automatic storage means ‘stack allocation’. Depending on your circumstances, you may want to add a `static` (and maybe `thread_local`) into `gunzip_ns::DeflateState state;` to use static allocation instead. Or, use `std::unique_ptr` to change it into dynamic allocation.
 
 ## Definitions
 
