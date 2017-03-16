@@ -6,33 +6,47 @@ that requires minimal amount of memory to work.
     Terms of use: Zlib    
     Copyright © 2017 Joel Yliluoma
 
-## Memory usage at aggressive settings
+## Memory usage at aggressive settings (backtrackable input)
+
+* 408 bytes of automatic storage for three huffman trees (384 elements, 5…9 bits each, 88 % space efficiency)
+* 24 bytes of temporary automatic storage while a huffman tree is being generated (15 elements, 9 bits each, 66 % space efficiency)
+* An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
+* ABI mandated alignment losses
+
+Total: 408 bytes minimum, 432+N bytes maximum
+
+Theoretical minimum at 100 % efficiency: 357.1 + 15.32 ≃ 373 bytes (not yet attained by this library).
+
+## Memory usage at aggressive settings (non-backtrackable input)
 
 * 144 bytes of automatic storage for length tables (288 elements, 4 bits each, 100 % space efficiency)
-* 384 bytes of automatic storage for huffman tree (352 elements, 5…9 bits each, 88 % space efficiency)
+* 384 bytes of automatic storage for two huffman trees (350 elements, 5…9 bits each, 88 % space efficiency)
 * 24 bytes of temporary automatic storage while a huffman tree is being generated (15 elements, 9 bits each, 66 % space efficiency)
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
 Total: 528 bytes minimum, 552+N bytes maximum
 
-In addition, if you neither decompress into a raw memory area nor supply your own window function,
-32768 bytes of automatic storage is allocated for the look-behind window.
-
 Theoretical minimum at 100 % efficiency: 144 + 338.9 + 15.32 ≃ 499 bytes (not yet attained by this library).
 
-## Memory usage at default settings
+## Memory usage at default settings (backtrackable input)
+
+* 687 bytes of automatic storage for three huffman trees (52 % space efficiency)
+* 30 bytes of temporary automatic storage while a huffman tree is being generated (53 % space efficiency)
+* An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
+* ABI mandated alignment losses
+
+Total: 687 bytes minimum, 717+N bytes maximum
+
+## Memory usage at default settings (non-backtrackable input)
 
 * 288 bytes of automatic storage for length tables (50 % space efficiency)
-* 653 bytes of automatic storage for huffman tree (52 % space efficiency)
+* 653 bytes of automatic storage for two huffman trees (52 % space efficiency)
 * 30 bytes of temporary automatic storage while a huffman tree is being generated (53 % space efficiency)
 * An assortment of automatic variables for various purposes (may be register variables, depending on the architecture and of the compiler wits)
 * ABI mandated alignment losses
 
 Total: 941 bytes minimum, 971+N bytes maximum
-
-In addition, if you neither decompress into a raw memory area nor supply your own window function,
-32768 bytes of automatic storage is allocated for the look-behind window.
 
 ## Tuning
 
@@ -40,10 +54,13 @@ To adjust the memory usage, there are three settings in gunzip.hh you can change
 
 | Setting name | 'false' memory use bytes | 'true' memory use bytes | 'true' performance impact
 | ------------------------------------------- | ---:| ----:|--------------
-| `USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION` |  30 | 24  | Negligible
-| `USE_BITARRAY_FOR_LENGTHS`                   | 288 | 144 | Noticeable
-| `USE_BITARRAY_FOR_HUFFNODES`                 | 653 | 384 | Significant
-| **Total**                                      | 971 | 552 | _Plus alignment losses, callframes and spills_
+| `USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION` |     30     |     24     | Negligible
+| `USE_BITARRAY_FOR_LENGTHS`                   | 288 or   0 | 144 or   0 | Noticeable
+| `USE_BITARRAY_FOR_HUFFNODES`                 | 653 or 687 | 384 or 408 | Significant
+| **Total**                                    | 971 or 717 | 552 or 432 | _Plus alignment losses, callframes and spills_
+
+In addition, if you neither decompress into a raw memory area nor supply your own window function,
+32768 bytes of automatic storage is allocated for the look-behind window.
 
 You can also change the memory allocation scheme:
 
@@ -83,119 +100,49 @@ distance used by your compressed data.
 ## Definitions
 
 ```C++
-// Most generic: Input and output functors
-template<typename InputFunctor, typename OutputFunctor>
-int Deflate(InputFunctor&& input, OutputFunctor&& output); // (1) (5) (9)
-
-// An optional window functor can be supplied, so the lib will not allocate 32768-byte look-behind buffer
-template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
-int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy); // (2) (5)
-
-// Output iterator (write only)
-template<typename InputFunctor, typename OutputIterator>
-int Deflate(InputFunctor&& input, OutputIterator&& target); // (5) (9)
-
-// Random-access iterator. It is also used for reading (look-behinds).
-template<typename InputFunctor, typename RandomAccessIterator>
-int Deflate(InputFunctor&& input, RandomAccessIterator&& target); // (5) (10)
-
-template<typename InputFunctor, typename RandomAccessIterator>
-int Deflate(InputFunctor&& input, RandomAccessIterator&& target, std::size_t target_limit); // (3) (5) (10)
-
-template<typename InputFunctor, typename RandomAccessIterator>
-int Deflate(InputFunctor&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (4) (5) (10)
-
-
-// These are the same as the first six,
-// but instead of an input functor, they use an input iterator.
-// An input iterator is dereferenced and read at most once (per byte), and then incremented.
-
-template<typename InputIterator, typename OutputFunctor>
-int Deflate(InputIterator&& input, OutputFunctor&& output); // (1) (7) (9)
-
-template<typename InputIterator, typename OutputFunctor, typename WindowFunctor>
-int Deflate(InputIterator&& input, OutputFunctor&& output, WindowFunctor&& outputcopy); // (2) (7)
-
-template<typename InputIterator, typename OutputIterator>
-int Deflate(InputIterator&& input, OutputIterator&& target); // (7) (9)
-
-template<typename InputIterator, typename RandomAccessIterator>
-int Deflate(InputIterator&& input, RandomAccessIterator&& target); // (7) (10)
-
-template<typename InputIterator, typename RandomAccessIterator>
-int Deflate(InputIterator&& input, RandomAccessIterator&& target, std::size_t target_limit); // (3) (7) (10)
-
-template<typename InputIterator, typename RandomAccessIterator>
-int Deflate(InputIterator&& input, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (4) (7) (10)
-
-
-// These are the same as the first six, but instead of an input functor,
-// they use a pair of forward iterators to indicate the range of input data.
-// Forward iterators are used like input iterators, but two iterators can be compared for equality.
-
-template<typename ForwardIterator, typename OutputFunctor>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output); // (1) (6) (9)
-
-template<typename ForwardIterator, typename OutputFunctor, typename WindowFunctor>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputFunctor&& output, WindowFunctor&& outputcopy); // (2) (6)
-
-template<typename ForwardIterator, typename OutputIterator>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, OutputIterator&& target); // (6) (9)
-
-template<typename ForwardIterator, typename RandomAccessIterator>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, RandomAccessIterator&& target); // (6) (10)
-
-template<typename ForwardIterator, typename RandomAccessIterator>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, RandomAccessIterator&& target, std::size_t target_limit); // (3) (6) (10)
-
-template<typename ForwardIterator, typename RandomAccessIterator>
-int Deflate(ForwardIterator&& begin, ForwardIterator&& end, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (4) (6) (10)
-
-
-// These are the same as the first six, but instead of an input functor,
-// they use an input iterator and a length.
-
-template<typename InputIterator, typename OutputFunctor>
-int Deflate(InputIterator&& begin, std::size_t length, OutputFunctor&& output); // (1) (7) (8) (9)
-
-template<typename InputIterator, typename OutputFunctor, typename WindowFunctor>
-int Deflate(InputIterator&& begin, std::size_t length, OutputFunctor&& output, WindowFunctor&& outputcopy); // (2) (7) (8)
-
-template<typename InputIterator, typename OutputIterator>
-int Deflate(InputIterator&& begin, std::size_t length, OutputIterator&& target); // (7) (8) (9)
-
-template<typename InputIterator, typename RandomAccessIterator>
-int Deflate(InputIterator&& begin, std::size_t length, RandomAccessIterator&& target); // (7) (8) (10)
-
-template<typename InputIterator, typename RandomAccessIterator>
-int Deflate(InputIterator&& begin, std::size_t length, RandomAccessIterator&& target, std::size_t target_limit); // (3) (7) (8) (10)
-
-template<typename InputIterator, typename RandomAccessIterator>
-int Deflate(InputIterator&& begin, std::size_t length, RandomAccessIterator&& target_begin, RandomAccessIterator&& target_end); // (4) (7) (8) (10)
-
-
-// Finally, the following three patterns are available, if you need to know
-// after decompression how many bytes were read and/or written:
-
 struct DeflateTrackNoSize{};
 struct DeflateTrackInSize{};
 struct DeflateTrackOutSize{};
 struct DeflateTrackBothSize{};
 
-template<typename... Args>
-int Deflate(Args&&... args, DeflateTrackNoSize); // (Same as no tag)
+int/*exit status*/ Deflate(InputParams..., OutputParams...,  DeflateTrackNoSize = {});
 
-template<typename... Args>
-std::pair<int, std::uint_fast64_t> Deflate(Args&&... args, DeflateTrackInSize); // (11)
+std::pair<int/*exit status*/, std::uint_fast64_t/*number of input bytes consumed*/>
+    Deflate(InputParams..., OutputParams...,  DeflateTrackInSize);   // (11)
 
-template<typename... Args>
-std::pair<int, std::uint_fast64_t> Deflate(Args&&... args, DeflateTrackOutSize); // (12)
+std::pair<int/*exit status*/, std::uint_fast64_t/*number of output bytes generated*/>
+    Deflate(InputParams..., OutputParams...,  DeflateTrackOutSize);  // (12)
 
-template<typename... Args>
-std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>> Deflate(Args&&... args, DeflateTrackBothSize); // (13)
+std::pair<int/*exit status*/, std::pair<std::uint_fast64_t/*in size*/, std::uint_fast64_t/*out size*/>>
+    Deflate(InputParams..., OutputParams...,  DeflateTrackBothSize); // (13)
 
-// A counter for sizes is only allocated if explicitly requested by using one of these three overloads.
+// A counter for sizes is only allocated if explicitly requested
+// by using one of the former three tracking overloads.
 ```
+
+`InputParams` may be one of the following sets of parameters:
+
+* InputFunctor   input                                   `(5)` `(14)`
+* InputIterator  begin                                   `(7)` `(14)`
+* InputIterator  begin, InputIterator end                `(6)` `(14)`
+* InputIterator  begin, SizeType length                  `(8)` `(14)`
+* BidirectionalIterator begin, SizeType length           `(8)` `(15)`
+* ForwardIterator       begin                            `(7)` `(14)`
+* BidirectionalIterator begin                            `(7)` `(15)`
+* RandomAccessIterator  begin                            `(7)` `(15)`
+* ForwardIterator       begin, ForwardIterator       end `(6)` `(15)`
+* BidirectionalIterator begin, BidirectionalIterator end `(6)` `(15)`
+* RandomAccessIterator  begin, RandomAccessIterator  end `(6)` `(15)`
+
+`OutputParams` may be one of the following sets of parameters:
+
+* OutputFunctor        output                          `(1)` `(9)`
+* OutputFunctor        output, WindowFunctor window    `(2)`
+* OutputIterator       target                          `(9)`
+* RandomAccessIterator target                                           `(10)`
+* RandomAccessIterator target,   SizeType target_limit            `(3)` `(10)`
+* RandomAccessIterator target,   RandomAccessIterator target_end  `(4)` `(10)`
+
 
 1) If the output functor (`output`) returns a `bool`, and the returned value is `true`, the decompression aborts with return value -3
 without writing any more data.
@@ -237,6 +184,10 @@ The `second` field in the return value contains the number of bytes that were wr
 13) The `first` field in the return value has the same meaning as the `int` type return value described earlier.    
 The `second.first` field in the return value contains the number of bytes that were consumed from the input.    
 The `second.second` field in the return value contains the number of bytes that were written to the output.
+
+14) This method is non-backtrackable, and uses a bit more memory than the backtrackable ones.
+
+15) This method is backtrackable, meaning that some bytes in the input may be read twice. It uses less memory than the non-backtrackable calls. 
 
 ### Tips
 
