@@ -86,7 +86,7 @@ namespace gunzip_ns
     static_assert(MAX_WINDOW_SIZE >= 1,      "Max window size should be >= 1");
     static_assert(MAX_WINDOW_SIZE <= 32768u, "Window sizes larger than 32768 are not supported by deflate standard. Edit the source code to remove this assert if you need it.");
 
-    // 
+    //
     #define DEFLATE_USE_DATA_TABLES
 
     #if !defined(DEFLATE_ALLOCATION_AUTOMATIC) && !defined(DEFLATE_ALLOCATION_STATIC) && !defined(DEFLATE_ALLOCATION_DYNAMIC)
@@ -464,7 +464,7 @@ namespace gunzip_ns
     // dbase with func                    24              22              26
     // lbase with table           12+32 = 48      12+32 = 48      21+64 = 76
     // lbase with func                    54              56              64
-    // dbits+lbits with table  12+16+29 = 57   12+16+29 = 57   17+21+29 = 67   
+    // dbits+lbits with table  12+16+29 = 57   12+16+29 = 57   17+21+29 = 67
     // dbits+lbits with func      14+18 = 32      14+18 = 32      13+20 = 33
 
     template<bool Abortable>
@@ -703,7 +703,7 @@ namespace gunzip_ns
         //                                total 482.91 bytes
 
         template<bool Abortable, typename InputFunctor, typename BacktrackFunctor>
-        auto DynTreeFunc(InputFunctor&& input, std::uint_fast16_t length, BacktrackFunctor&&)
+        auto DynTreeFunc(InputFunctor&& input, std::uint_fast16_t length, BacktrackFunctor&& /*backtrack*/)
         {
             Lengths = {}; // clear at least length nibbles; easiest to clear it all
             bool error = false;
@@ -755,7 +755,7 @@ namespace gunzip_ns
         // Length-lengths tree
         //   Values up to 19 in indexes 0-14.  (Table) (13 is max observed in wild)
         //   Values up to 18 in indexes 15-33. (Trans)
-        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 15+19, CeilLog2<20>> lltree;   // 22->24 bytes
+        RandomAccessArray<USE_BITARRAY_FOR_HUFFNODES, 15+19, CeilLog2<20>> lltree;  // 22->24 bytes
 
         // Theoretical minimum memory use:
         //   (15*log2(289) + 288*log2(288))/8 = 309.45 bytes for ltree
@@ -768,7 +768,7 @@ namespace gunzip_ns
         std::uint_least8_t checkpoint_BitCache, checkpoint_BitCount;
 
         template<bool Abortable, typename InputFunctor, typename BacktrackFunctor>
-        auto DynTreeFunc(InputFunctor&& input, std::uint_fast16_t length, BacktrackFunctor&& backtrack)
+        auto DynTreeFunc(InputFunctor&& input, std::uint_fast16_t /*length*/, BacktrackFunctor&& backtrack)
         {
             // Create checkpoint
             checkpoint_lencode  = 0;
@@ -777,7 +777,7 @@ namespace gunzip_ns
             checkpoint_BitCount = BitCount;
             backtrack(false);
 
-            return [&](unsigned index) -> std::conditional_t<Abortable, int, unsigned char>
+            return [this,&input,&backtrack](unsigned index) -> std::conditional_t<Abortable, int, unsigned char>
             {
                 if(index == 0)
                 {
