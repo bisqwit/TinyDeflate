@@ -6,7 +6,7 @@
 /* Fun fact: Contains zero new/delete, and no STL data structures */
 /* Distributed under the terms of the Zlib license:
 
-  Copyright (C) 2017 Joel Yliluoma
+  Copyright (C) 2018 Joel Yliluoma
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -95,69 +95,13 @@ namespace gunzip_ns
     //#define DEFLATE_ALLOCATION_STATIC
     //#define DEFLATE_ALLOCATION_DYNAMIC
     #endif
+
+    constexpr unsigned Flag_InputAbortable  = 0x01;
+    constexpr unsigned Flag_OutputAbortable = 0x02;
+    constexpr unsigned Flag_TrackIn  = 0x40;
+    constexpr unsigned Flag_TrackOut = 0x80;
+    constexpr unsigned Flag_NoTrackFlagMask = 0x03;
 }
-
-/* A big list of conditions used in std::enable_if conditions. */
-
-#define DeflIsInputFunctor \
-    (std::is_convertible<std::result_of_t<std::decay_t<InputFunctor>()>,int>::value /*\
-                      && !std::is_pointer<std::decay_t<InputFunctor>>::value*/)
-#define DeflIsOutputFunctor \
-           (std::is_same<std::result_of_t<std::decay_t<OutputFunctor>(int)>,void>::value \
-  || std::is_convertible<std::result_of_t<std::decay_t<OutputFunctor>(int)>,bool>::value)
-#define DeflIsWindowFunctor \
-    (std::is_convertible<std::result_of_t<std::decay_t<WindowFunctor>(int,int)>,int>::value \
-         || std::is_same<std::result_of_t<std::decay_t<WindowFunctor>(int,int)>,void>::value)
-
-#define DeflIsBacktrackFunctor \
-    (std::is_same<std::result_of_t<std::decay_t<BacktrackFunctor>(bool)>,void>::value)
-
-#define DeflIsForwardIterator \
-    (std::is_convertible<typename std::iterator_traits<std::decay_t<ForwardIterator>>::value_type, unsigned char>::value \
-        && (std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::forward_iterator_tag>::value \
-         || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::bidirectional_iterator_tag>::value \
-         || std::is_same<typename std::iterator_traits<std::decay_t<ForwardIterator>>::iterator_category, std::random_access_iterator_tag>::value))
-
-#define DeflIsBidirIterator \
-    (std::is_convertible<typename std::iterator_traits<std::decay_t<BidirIterator>>::value_type, unsigned char>::value \
-        && (std::is_same<typename std::iterator_traits<std::decay_t<BidirIterator>>::iterator_category, std::bidirectional_iterator_tag>::value \
-         || std::is_same<typename std::iterator_traits<std::decay_t<BidirIterator>>::iterator_category, std::random_access_iterator_tag>::value))
-
-#define DeflIsInputIterator \
-    (std::is_convertible<typename std::iterator_traits<std::decay_t<InputIterator>>::value_type, unsigned char>::value \
-        && (std::is_same<typename std::iterator_traits<std::decay_t<InputIterator>>::iterator_category, std::input_iterator_tag>::value))
-
-#define DeflIsRandomAccessIterator \
-    (std::is_convertible<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::value_type, unsigned char>::value \
-       && !std::is_const<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::reference>::value \
-         && std::is_same<typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::iterator_category, std::random_access_iterator_tag>::value)
-
-#define DeflIsOutputIterator \
-    (std::is_convertible<typename std::iterator_traits<std::decay_t<OutputIterator>>::value_type, unsigned char>::value \
-       && !std::is_const<typename std::iterator_traits<std::decay_t<OutputIterator>>::reference>::value \
-                                   && !std::is_pointer<std::decay_t<OutputIterator>>::value \
-        && (std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::output_iterator_tag>::value \
-         || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::forward_iterator_tag>::value \
-         || std::is_same<typename std::iterator_traits<std::decay_t<OutputIterator>>::iterator_category, std::bidirectional_iterator_tag>::value))
-
-#define DeflIsSizeType \
-    (std::is_convertible<std::decay_t<SizeType>, std::size_t>::value \
-     && !std::is_pointer<std::decay_t<SizeType>>::value)
-#define DeflIsSizeType2 \
-    (std::is_convertible<std::decay_t<SizeType2>, std::size_t>::value \
-     && !std::is_pointer<std::decay_t<SizeType2>>::value)
-#define DeflIsTrackTag \
-    (std::is_base_of<DeflateTrackTagBase, std::decay_t<SizeTrackTag>>::value)
-#define DeflInputAbortable_Type(x) \
-    (1* !(std::is_same<x, unsigned char>::value \
-       || std::is_same<x,   signed char>::value \
-       || std::is_same<x,          char>::value))
-#define DeflInputAbortable_InputFunctor \
-    DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>)
-#define DeflOutputAbortable_OutputFunctor \
-    (2* std::is_same<std::result_of_t<OutputFunctor(int)>, bool>::value)
-#define DeflOutputAbortable_WindowFunctor \
-    (2* std::is_convertible<std::decay_t<std::result_of_t<WindowFunctor(int,int)>>, int>::value)
 
 #ifdef DEFLATE_ALLOCATION_DYNAMIC
 # include <memory>
@@ -467,6 +411,70 @@ namespace gunzip_ns
     // dbits+lbits with table  12+16+29 = 57   12+16+29 = 57   17+21+29 = 67
     // dbits+lbits with func      14+18 = 32      14+18 = 32      13+20 = 33
 
+    template<typename T>
+    using remove_cvref_t = std::remove_reference_t<std::remove_cv_t<T>>;
+
+    #define BEGIN_COND(name) \
+        template<typename T, typename=void> struct name : public std::false_type {}; \
+        template<typename T> struct name<T, std::enable_if_t<
+    #define END_COND(name) \
+        , void>> : public std::true_type {}; \
+        template<typename T> \
+        inline constexpr bool name ## _v = name<T>::value; \
+
+    // Input parameter condition testers:
+    BEGIN_COND(is_input_functor)
+        std::is_convertible_v<std::result_of_t<remove_cvref_t<T>()>,int>
+    END_COND(is_input_functor)
+    BEGIN_COND(is_input_iterator)
+        std::is_convertible_v<typename std::iterator_traits<remove_cvref_t<T>>::value_type, unsigned char>
+     && std::is_same_v<typename std::iterator_traits<remove_cvref_t<T>>::iterator_category, std::input_iterator_tag>
+    END_COND(is_input_iterator)
+    BEGIN_COND(is_bidir_input)
+        std::is_convertible_v<typename std::iterator_traits<remove_cvref_t<T>>::value_type, unsigned char>
+     && (std::is_same_v<typename std::iterator_traits<remove_cvref_t<T>>::iterator_category, std::forward_iterator_tag>
+      || std::is_same_v<typename std::iterator_traits<remove_cvref_t<T>>::iterator_category, std::bidirectional_iterator_tag>
+      || std::is_same_v<typename std::iterator_traits<remove_cvref_t<T>>::iterator_category, std::random_access_iterator_tag>)
+    END_COND(is_bidir_input)
+    BEGIN_COND(is_size_type)
+        std::is_convertible_v<remove_cvref_t<T>, std::size_t> && !std::is_pointer_v<remove_cvref_t<T>>
+    END_COND(is_size_type)
+    // Output parameter condition testers:
+    BEGIN_COND(is_random_iterator)
+        std::is_convertible_v<typename std::iterator_traits<remove_cvref_t<T>>::value_type, unsigned char>
+     && !std::is_const_v<typename std::iterator_traits<remove_cvref_t<T>>::reference>
+     && std::is_same_v<typename std::iterator_traits<remove_cvref_t<T>>::iterator_category, std::random_access_iterator_tag>
+    END_COND(is_random_iterator)
+    BEGIN_COND(is_output_iterator)
+        std::is_convertible_v<typename std::iterator_traits<remove_cvref_t<T>>::value_type, unsigned char>
+    && !std::is_const_v<typename std::iterator_traits<remove_cvref_t<T>>::reference>
+                                && !std::is_pointer_v<remove_cvref_t<T>>
+    && (std::is_same_v<typename std::iterator_traits<remove_cvref_t<T>>::iterator_category, std::output_iterator_tag>
+     || std::is_same_v<typename std::iterator_traits<remove_cvref_t<T>>::iterator_category, std::forward_iterator_tag>
+     || std::is_same_v<typename std::iterator_traits<remove_cvref_t<T>>::iterator_category, std::bidirectional_iterator_tag>)
+    END_COND(is_output_iterator)
+    // Output functor & window functor: Returns void or something that can be converted to bool
+    BEGIN_COND(is_output_functor)
+        std::is_same_v<std::result_of_t<remove_cvref_t<T>(int)>,void> || std::is_convertible_v<std::result_of_t<remove_cvref_t<T>(int)>,bool>
+    END_COND(is_output_functor)
+    BEGIN_COND(is_window_functor)
+        std::is_same_v<std::result_of_t<remove_cvref_t<T>(int,int)>,void> || std::is_convertible_v<std::result_of_t<remove_cvref_t<T>(int,int)>,int>
+    END_COND(is_window_functor)
+
+    BEGIN_COND(is_abortable_input_type)
+        !(std::is_same_v<T, unsigned char> || std::is_same_v<T, signed char> || std::is_same_v<T, char>)
+    END_COND(is_abortable_input_type)
+
+    #undef END_COND
+    #undef BEGIN_COND
+
+    template<typename T>
+    constexpr bool DeflAbortable_InFun  = is_abortable_input_type_v<remove_cvref_t<std::result_of_t<T()>>>;
+    template<typename T>
+    constexpr bool DeflAbortable_OutFun = std::is_same_v<std::result_of_t<T(int)>, bool>;
+    template<typename T>
+    constexpr bool DeflAbortable_WinFun = std::is_convertible_v<remove_cvref_t<std::result_of_t<T(int,int)>>, int>;
+
     template<bool Abortable>
     struct OutputHelper
     {
@@ -533,13 +541,13 @@ namespace gunzip_ns
         inline void InByte()                      { ++insize; }
         inline void InBytes(std::uint_fast64_t n) { insize += n; }
 
-        template<typename InputFunctor, std::enable_if_t<!DeflInputAbortable_InputFunctor,gunzip_ns::dummy>...>
+        template<typename InputFunctor, std::enable_if_t<!DeflAbortable_InFun<InputFunctor>,gunzip_ns::dummy>...>
         auto ForwardInput(const InputFunctor& input)
         {
             return [&]() { InByte(); return input(); };
         }
 
-        template<typename InputFunctor, std::enable_if_t<DeflInputAbortable_InputFunctor,gunzip_ns::dummy>...>
+        template<typename InputFunctor, std::enable_if_t<DeflAbortable_InFun<InputFunctor>,gunzip_ns::dummy>...>
         auto ForwardInput(const InputFunctor& input)
         {
             return [&]() { auto r = input(); if(!(r & ~0xFF)) { InByte(); } return r; };
@@ -552,19 +560,19 @@ namespace gunzip_ns
         inline void OutByte()                      { ++outsize; }
         inline void OutBytes(std::uint_fast64_t n) { outsize += n; }
 
-        template<typename OutputFunctor, std::enable_if_t<!DeflOutputAbortable_OutputFunctor,gunzip_ns::dummy>...>
+        template<typename OutputFunctor, std::enable_if_t<!DeflAbortable_OutFun<OutputFunctor>,gunzip_ns::dummy>...>
         auto ForwardOutput(const OutputFunctor& output)
         {
             return [&](unsigned char byte) { OutByte(); return output(byte); };
         }
 
-        template<typename OutputFunctor, std::enable_if_t<DeflOutputAbortable_OutputFunctor,gunzip_ns::dummy>...>
+        template<typename OutputFunctor, std::enable_if_t<DeflAbortable_OutFun<OutputFunctor>,gunzip_ns::dummy>...>
         auto ForwardOutput(const OutputFunctor& output)
         {
             return [&](unsigned char byte) { auto r = output(byte); if(!r) { OutByte(); } return r; };
         }
 
-        template<typename WindowFunctor, std::enable_if_t<!DeflOutputAbortable_WindowFunctor,gunzip_ns::dummy>...>
+        template<typename WindowFunctor, std::enable_if_t<!DeflAbortable_WinFun<WindowFunctor>,gunzip_ns::dummy>...>
         auto ForwardWindow(const WindowFunctor& outputcopy)
         {
             return [&](std::uint_least16_t length, std::uint_fast32_t offset)
@@ -574,7 +582,7 @@ namespace gunzip_ns
             };
         }
 
-        template<typename WindowFunctor, std::enable_if_t<DeflOutputAbortable_WindowFunctor,gunzip_ns::dummy>...>
+        template<typename WindowFunctor, std::enable_if_t<DeflAbortable_WinFun<WindowFunctor>,gunzip_ns::dummy>...>
         auto ForwardWindow(const WindowFunctor& outputcopy)
         {
             return [&](std::uint_least16_t length, std::uint_fast32_t offset)
@@ -830,6 +838,9 @@ namespace gunzip_ns
     #endif
 
     /* Values of Abortable:
+     *   Input abortable  = &1
+     *   Output abortable = &2
+     *   Resumable        = &4
      *
      *   Input abortable    Output abortable   Resumable     Value
      *                no                  no          no     0
@@ -851,7 +862,7 @@ namespace gunzip_ns
     {
         using namespace gunzip_ns;
 
-        typedef DeflateState<!std::is_same<std::decay_t<BacktrackFunctor>,dummy>::value> StateType;
+        typedef DeflateState<!std::is_same_v<remove_cvref_t<BacktrackFunctor>,dummy>> StateType;
 #ifdef DEFLATE_ALLOCATION_AUTOMATIC
         StateType state;
 #elif defined(DEFLATE_ALLOCATION_STATIC)
@@ -866,19 +877,19 @@ namespace gunzip_ns
 
         // Bit-by-bit input routine
         #define DummyGetBits(numbits) do { \
-            auto p = state.template GetBits<bool(Abortable&1)>(std::forward<InputFunctor>(input), numbits); \
-            if((Abortable & 1) && !~p) return -2; \
+            auto p = state.template GetBits<bool(Abortable&Flag_InputAbortable)>(std::forward<InputFunctor>(input), numbits); \
+            if((Abortable & Flag_InputAbortable) && !~p) return -2; \
         } while(0)
 
         #define GetBits(numbits, target) \
-            auto p = state.template GetBits<bool(Abortable&1)>(std::forward<InputFunctor>(input), numbits); \
-            if((Abortable & 1) && !~p) return -2; \
+            auto p = state.template GetBits<bool(Abortable&Flag_InputAbortable)>(std::forward<InputFunctor>(input), numbits); \
+            if((Abortable & Flag_InputAbortable) && !~p) return -2; \
             target = p
 
         // Huffman tree read routine.
         #define HuffRead(tree, target) \
-            auto p = state.template HuffRead<bool(Abortable&1)>(std::forward<InputFunctor>(input), tree); \
-            if((Abortable & 1) && !~p) return -2; \
+            auto p = state.template HuffRead<bool(Abortable&Flag_InputAbortable)>(std::forward<InputFunctor>(input), tree); \
+            if((Abortable & Flag_InputAbortable) && !~p) return -2; \
             target = p
 
         #define Fail_If(condition) do { \
@@ -922,13 +933,13 @@ namespace gunzip_ns
                 std::uint_least8_t ncode = ((nlen_ndist_ncode >> 10u) + 4u); // 4..19
                 {std::uint_fast64_t lenlens; GetBits(ncode*3, lenlens);      // Max: 19*3 = 57 bits
                 auto lltree_fun = [=](unsigned a) -> unsigned char { return (lenlens >> rshift(a)) & 7; };
-                while(CreateHuffmanTree<bool(Abortable&1)>("Len Lengths", state.lltree, 19, lltree_fun)) { return -2; }}
+                while(CreateHuffmanTree<bool(Abortable&Flag_InputAbortable)>("Len Lengths", state.lltree, 19, lltree_fun)) { return -2; }}
 
-                {auto ltree_fun = state.template DynTreeFunc<bool(Abortable&1)>(std::forward<InputFunctor>(input), nlen, std::forward<BacktrackFunctor>(backtrack));
-                while(CreateHuffmanTree<bool(Abortable&1)>("Dyn Lengths", state.ltree, nlen, ltree_fun)) { return -2; }}
+                {auto ltree_fun = state.template DynTreeFunc<bool(Abortable&Flag_InputAbortable)>(std::forward<InputFunctor>(input), nlen, std::forward<BacktrackFunctor>(backtrack));
+                while(CreateHuffmanTree<bool(Abortable&Flag_InputAbortable)>("Dyn Lengths", state.ltree, nlen, ltree_fun)) { return -2; }}
 
-                {auto dtree_fun = state.template DynTreeFunc<bool(Abortable&1)>(std::forward<InputFunctor>(input), ndist, std::forward<BacktrackFunctor>(backtrack));
-                while(CreateHuffmanTree<bool(Abortable&1)>("Dyn Dists",   state.dtree, ndist, dtree_fun)) { return -2; }}
+                {auto dtree_fun = state.template DynTreeFunc<bool(Abortable&Flag_InputAbortable)>(std::forward<InputFunctor>(input), ndist, std::forward<BacktrackFunctor>(backtrack));
+                while(CreateHuffmanTree<bool(Abortable&Flag_InputAbortable)>("Dyn Dists",   state.dtree, ndist, dtree_fun)) { return -2; }}
 
                 #undef nlen
                 #undef ndist
@@ -945,7 +956,7 @@ namespace gunzip_ns
                     while(a-- & 0xFFFF)
                     {
                         GetBits(8, unsigned char octet);
-                        while(OutputHelper<bool(Abortable&2)>::output(output, octet)) { return -3; }
+                        while(OutputHelper<bool(Abortable&Flag_OutputAbortable)>::output(output, octet)) { return -3; }
                     }
                     goto skipdef;
                 }
@@ -961,7 +972,7 @@ namespace gunzip_ns
                 HuffRead(state.ltree, std::uint_least16_t lencode); // 0..287
                 if(!(lencode & -256)) // 0..255: literal byte
                 {
-                    while(OutputHelper<bool(Abortable&2)>::output(output, lencode)) { return -3; }
+                    while(OutputHelper<bool(Abortable&Flag_OutputAbortable)>::output(output, lencode)) { return -3; }
                 }
                 else if(!(lencode & 0xFF)) break; // 256=end
                 else // 257..287: length code for backwards reference
@@ -969,7 +980,7 @@ namespace gunzip_ns
                     GetBits(lbits(lencode), std::uint_least16_t length); length += lbase(lencode);
                     {HuffRead(state.dtree, std::uint_least8_t distcode); // Read distance code (0..31)
                     {GetBits(dbits(distcode), std::uint_least32_t offset); offset += dbase(distcode);
-                    while(OutputHelper<bool(Abortable&2)>::outputcopy(outputcopy,length,offset)) { return -4; }}}
+                    while(OutputHelper<bool(Abortable&Flag_OutputAbortable)>::outputcopy(outputcopy,length,offset)) { return -4; }}}
                 }
             }
     skipdef:if(header & 1) break; // last block flag
@@ -983,1500 +994,337 @@ namespace gunzip_ns
     }
 }//ns
 
-#ifdef DEFLATE_ALLOCATION_AUTOMATIC
-    #define DeflDeclWindow gunzip_ns::DeflateWindow window;
-#elif defined(DEFLATE_ALLOCATION_STATIC)
-    #define DeflDeclWindow auto& window = gunzip_ns::GetStaticObj<gunzip_ns::DeflateWindow>();
-#elif defined(DEFLATE_ALLOCATION_DYNAMIC)
-    #define DeflDeclWindow std::unique_ptr<gunzip_ns::DeflateWindow> winptr(new gunzip_ns::DeflateWindow); \
-                           auto& window = *winptr;
-#endif
 
-
-#define DEFL_MACRO_Inf  \
-    gunzip_ns::dummy btfun{};
-#define DEFL_MACRO_InI  \
-    auto inputfun = [&]() { auto r = *input; ++input; return r; }; \
-    gunzip_ns::dummy btfun{};
-#define DEFL_MACRO_InI2  \
-    auto inputfun = [&]() { if(begin==end) { return -1; } int r = *begin; ++begin; return r; }; \
-    gunzip_ns::dummy btfun{};
-#define DEFL_MACRO_InIl  \
-    typename std::iterator_traits<std::decay_t<InputIterator>>::difference_type remain(length); \
-    auto inputfun = [&]() -> std::common_type_t<int, decltype(*begin)>  \
-    { if(!remain) { return -1; } --remain; int r = *begin; ++begin; return r; }; \
-    gunzip_ns::dummy btfun{};
-#define DEFL_MACRO_InBl  \
-    typename std::iterator_traits<std::decay_t<BidirIterator>>::difference_type remain(length), savestate{}; \
-    auto inputfun = [&]() -> std::common_type_t<int, decltype(*begin)>  \
-    { if(!remain) { return -1; } --remain; int r = *begin; ++begin; return r; }; \
-    auto btfun    = [&](bool act) { if(act) { begin -= (savestate-remain); remain = savestate; } else savestate = remain; };
-#define DEFL_MACRO_InF  \
-    ForwardIterator saved;auto inputfun = [&]() { auto r = *begin; ++begin; return r; }; \
-    auto btfun    = [&](bool act) { if(act) begin = saved; else saved = std::move(begin); };
-#define DEFL_MACRO_InF2  \
-    ForwardIterator saved; \
-    auto inputfun = [&]() { if(begin==end) { return -1; } int r = *begin; ++begin; return r; }; \
-    auto btfun    = [&](bool act) { if(act) begin = saved; else saved = std::move(begin); };
-#define DEFL_MACRO_Outf  \
-    DeflDeclWindow \
-    auto output = [&](unsigned char l) \
-    { \
-        window.Data[window.Head++ % gunzip_ns::MAX_WINDOW_SIZE] = l; \
-        return output_orig(l); \
-    }; \
-    auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs) \
-    { \
-        /* length=0 means that offs is the size of the window. */ \
-        for(; length>0; --length) \
-        { \
-            unsigned char byte = window.Data[(window.Head - offs) % gunzip_ns::MAX_WINDOW_SIZE]; \
-            if(gunzip_ns::OutputHelper<bool(Abortable&2)>::output(output, byte)) \
-                break; \
-        } \
-        return length; \
-    };
-#define DEFL_MACRO_OutI  \
-    DeflDeclWindow \
-    auto output = [&](unsigned char l) \
-    { \
-        window.Data[window.Head++ % gunzip_ns::MAX_WINDOW_SIZE] = l; \
-        *target = l; ++target; \
-    }; \
-    auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs) \
-    { \
-        /* length=0 means that offs is the size of the window. */ \
-        for(; length>0; --length) \
-        { \
-            unsigned char byte = window.Data[(window.Head - offs) % gunzip_ns::MAX_WINDOW_SIZE]; \
-            output(byte); \
-        } \
-        return false; \
-    };
-#define DEFL_MACRO_Outr  \
-    auto output     = [&](unsigned char l) { *target = l; ++target; }; \
-    auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs) \
-    { \
-        /* length=0 means that offs is the size of the window. */ \
-        for(; length--; ++target) { *target = *(target-offs); } \
-    };
-#define DEFL_MACRO_Outrl  \
-    typename std::iterator_traits<std::decay_t<RandomAccessIterator>>::difference_type used{}, cap=target_limit; \
-    auto output = [&](unsigned char l) \
-    { \
-        if(used >= cap) return true; \
-        target[used] = l; ++used; \
-        return false; \
-    }; \
-    auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs) \
-    { \
-        /* length=0 means that offs is the size of the window. */ \
-        for(; length > 0 && used < cap; ++used, --length) \
-        { \
-            target[used] = target[used - offs]; \
-        } \
-        return length; \
-    };
-#define DEFL_MACRO_Outr2  \
-    auto output = [&](unsigned char l) \
-    { \
-        if(target_begin == target_end) return true; \
-        *target_begin = l; ++target_begin; \
-        return false; \
-    }; \
-    auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs) \
-    { \
-        /* length=0 means that offs is the size of the window. */ \
-        for(; length > 0 && !(target_begin == target_end); --length, ++target_begin) \
-        { \
-            *target_begin = *(target_begin - offs); \
-        } \
-        return length; \
-    };
-#define DEFL_MACRO_Tk0  \
-    return gunzip_ns::Gunzip<Abortable>(inputfun, output, outputcopy, btfun);
-#define DEFL_MACRO_Tki  \
-    gunzip_ns::SizeTracker<DeflateTrackInSize> tracker; \
-    return tracker(gunzip_ns::Gunzip<Abortable>(tracker.template ForwardInput(inputfun), output, outputcopy, btfun));
-#define DEFL_MACRO_Tko  \
-    gunzip_ns::SizeTracker<DeflateTrackOutSize> tracker; \
-    return tracker(gunzip_ns::Gunzip<Abortable>(inputfun, tracker.template ForwardOutput(output), tracker.template ForwardWindow(outputcopy), btfun));
-#define DEFL_MACRO_Tkb  \
-    gunzip_ns::SizeTracker<DeflateTrackBothSize> tracker; \
-    return tracker(gunzip_ns::Gunzip<Abortable>(tracker.template ForwardInput(inputfun), tracker.template ForwardOutput(output), tracker.template ForwardWindow(outputcopy), btfun));
-template<typename InputFunctor,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindowFunctor, int>
-    Deflate(InputFunctor&& inputfun,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_Inf  DEFL_MACRO_Tk0
-}
-
-template<typename InputFunctor,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_Inf  DEFL_MACRO_Tki
-}
-
-template<typename InputFunctor,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_Inf  DEFL_MACRO_Tko
-}
-
-template<typename InputFunctor,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputFunctor&& inputfun,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_Inf  DEFL_MACRO_Tkb
-}
-
-template<typename InputFunctor,typename OutputFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor, int>
-    Deflate(InputFunctor&& inputfun,OutputFunctor&& output_orig,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_Inf DEFL_MACRO_Outf DEFL_MACRO_Tk0
-}
-
-template<typename InputFunctor,typename OutputFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,OutputFunctor&& output_orig,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_Inf DEFL_MACRO_Outf DEFL_MACRO_Tki
-}
-
-template<typename InputFunctor,typename OutputFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,OutputFunctor&& output_orig,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_Inf DEFL_MACRO_Outf DEFL_MACRO_Tko
-}
-
-template<typename InputFunctor,typename OutputFunctor>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputFunctor&& inputfun,OutputFunctor&& output_orig,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_Inf DEFL_MACRO_Outf DEFL_MACRO_Tkb
-}
-
-template<typename InputFunctor,typename OutputIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputIterator, int>
-    Deflate(InputFunctor&& inputfun,OutputIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 0;
-DEFL_MACRO_Inf DEFL_MACRO_OutI DEFL_MACRO_Tk0
-}
-
-template<typename InputFunctor,typename OutputIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,OutputIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 0;
-DEFL_MACRO_Inf DEFL_MACRO_OutI DEFL_MACRO_Tki
-}
-
-template<typename InputFunctor,typename OutputIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,OutputIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 0;
-DEFL_MACRO_Inf DEFL_MACRO_OutI DEFL_MACRO_Tko
-}
-
-template<typename InputFunctor,typename OutputIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsOutputIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputFunctor&& inputfun,OutputIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 0;
-DEFL_MACRO_Inf DEFL_MACRO_OutI DEFL_MACRO_Tkb
-}
-
-template<typename InputFunctor,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 0;
-DEFL_MACRO_Inf DEFL_MACRO_Outr DEFL_MACRO_Tk0
-}
-
-template<typename InputFunctor,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 0;
-DEFL_MACRO_Inf DEFL_MACRO_Outr DEFL_MACRO_Tki
-}
-
-template<typename InputFunctor,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 0;
-DEFL_MACRO_Inf DEFL_MACRO_Outr DEFL_MACRO_Tko
-}
-
-template<typename InputFunctor,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 0;
-DEFL_MACRO_Inf DEFL_MACRO_Outr DEFL_MACRO_Tkb
-}
-
-template<typename InputFunctor,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeType2, int>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 2;
-DEFL_MACRO_Inf DEFL_MACRO_Outrl DEFL_MACRO_Tk0
-}
-
-template<typename InputFunctor,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 2;
-DEFL_MACRO_Inf DEFL_MACRO_Outrl DEFL_MACRO_Tki
-}
-
-template<typename InputFunctor,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 2;
-DEFL_MACRO_Inf DEFL_MACRO_Outrl DEFL_MACRO_Tko
-}
-
-template<typename InputFunctor,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 2;
-DEFL_MACRO_Inf DEFL_MACRO_Outrl DEFL_MACRO_Tkb
-}
-
-template<typename InputFunctor,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, int>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 2;
-DEFL_MACRO_Inf DEFL_MACRO_Outr2 DEFL_MACRO_Tk0
-}
-
-template<typename InputFunctor,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 2;
-DEFL_MACRO_Inf DEFL_MACRO_Outr2 DEFL_MACRO_Tki
-}
-
-template<typename InputFunctor,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 2;
-DEFL_MACRO_Inf DEFL_MACRO_Outr2 DEFL_MACRO_Tko
-}
-
-template<typename InputFunctor,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputFunctor && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputFunctor&& inputfun,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<std::result_of_t<InputFunctor()>>) | 2;
-DEFL_MACRO_Inf DEFL_MACRO_Outr2 DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, int>
-    Deflate(InputIterator&& input,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InI  DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InI  DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InI  DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& input,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InI  DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor, int>
-    Deflate(InputIterator&& input,OutputFunctor&& output_orig,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InI DEFL_MACRO_Outf DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,OutputFunctor&& output_orig,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InI DEFL_MACRO_Outf DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,OutputFunctor&& output_orig,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InI DEFL_MACRO_Outf DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& input,OutputFunctor&& output_orig,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InI DEFL_MACRO_Outf DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputIterator, int>
-    Deflate(InputIterator&& input,OutputIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 0;
-DEFL_MACRO_InI DEFL_MACRO_OutI DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,OutputIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 0;
-DEFL_MACRO_InI DEFL_MACRO_OutI DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,OutputIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 0;
-DEFL_MACRO_InI DEFL_MACRO_OutI DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& input,OutputIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 0;
-DEFL_MACRO_InI DEFL_MACRO_OutI DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, int>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 0;
-DEFL_MACRO_InI DEFL_MACRO_Outr DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 0;
-DEFL_MACRO_InI DEFL_MACRO_Outr DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 0;
-DEFL_MACRO_InI DEFL_MACRO_Outr DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 0;
-DEFL_MACRO_InI DEFL_MACRO_Outr DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, int>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 2;
-DEFL_MACRO_InI DEFL_MACRO_Outrl DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 2;
-DEFL_MACRO_InI DEFL_MACRO_Outrl DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 2;
-DEFL_MACRO_InI DEFL_MACRO_Outrl DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 2;
-DEFL_MACRO_InI DEFL_MACRO_Outrl DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, int>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 2;
-DEFL_MACRO_InI DEFL_MACRO_Outr2 DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 2;
-DEFL_MACRO_InI DEFL_MACRO_Outr2 DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 2;
-DEFL_MACRO_InI DEFL_MACRO_Outr2 DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& input,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = DeflInputAbortable_Type(std::decay_t<decltype(*input)>) | 2;
-DEFL_MACRO_InI DEFL_MACRO_Outr2 DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, int>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InI2  DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InI2  DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InI2  DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InI2  DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor, int>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputFunctor&& output_orig,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InI2 DEFL_MACRO_Outf DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputFunctor&& output_orig,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InI2 DEFL_MACRO_Outf DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputFunctor&& output_orig,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InI2 DEFL_MACRO_Outf DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputFunctor&& output_orig,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InI2 DEFL_MACRO_Outf DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputIterator, int>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InI2 DEFL_MACRO_OutI DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InI2 DEFL_MACRO_OutI DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InI2 DEFL_MACRO_OutI DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsOutputIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,InputIterator&& end,OutputIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InI2 DEFL_MACRO_OutI DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, int>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InI2 DEFL_MACRO_Outr DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InI2 DEFL_MACRO_Outr DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InI2 DEFL_MACRO_Outr DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InI2 DEFL_MACRO_Outr DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, int>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InI2 DEFL_MACRO_Outrl DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InI2 DEFL_MACRO_Outrl DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InI2 DEFL_MACRO_Outrl DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InI2 DEFL_MACRO_Outrl DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, int>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InI2 DEFL_MACRO_Outr2 DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InI2 DEFL_MACRO_Outr2 DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InI2 DEFL_MACRO_Outr2 DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,InputIterator&& end,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InI2 DEFL_MACRO_Outr2 DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename SizeType,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor && DeflIsWindowFunctor, int>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InIl  DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename SizeType,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InIl  DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename SizeType,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InIl  DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename SizeType,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InIl  DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename SizeType,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor, int>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputFunctor&& output_orig,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InIl DEFL_MACRO_Outf DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename SizeType,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputFunctor&& output_orig,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InIl DEFL_MACRO_Outf DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename SizeType,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputFunctor&& output_orig,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InIl DEFL_MACRO_Outf DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename SizeType,typename OutputFunctor>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputFunctor&& output_orig,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InIl DEFL_MACRO_Outf DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename SizeType,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputIterator, int>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InIl DEFL_MACRO_OutI DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename SizeType,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InIl DEFL_MACRO_OutI DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename SizeType,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InIl DEFL_MACRO_OutI DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename SizeType,typename OutputIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsOutputIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,SizeType&& length,OutputIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InIl DEFL_MACRO_OutI DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, int>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InIl DEFL_MACRO_Outr DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InIl DEFL_MACRO_Outr DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InIl DEFL_MACRO_Outr DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InIl DEFL_MACRO_Outr DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator && DeflIsSizeType2, int>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InIl DEFL_MACRO_Outrl DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InIl DEFL_MACRO_Outrl DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InIl DEFL_MACRO_Outrl DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InIl DEFL_MACRO_Outrl DEFL_MACRO_Tkb
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, int>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InIl DEFL_MACRO_Outr2 DEFL_MACRO_Tk0
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InIl DEFL_MACRO_Outr2 DEFL_MACRO_Tki
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InIl DEFL_MACRO_Outr2 DEFL_MACRO_Tko
-}
-
-template<typename InputIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsInputIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(InputIterator&& begin,SizeType&& length,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InIl DEFL_MACRO_Outr2 DEFL_MACRO_Tkb
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputFunctor && DeflIsWindowFunctor, int>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InBl  DEFL_MACRO_Tk0
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InBl  DEFL_MACRO_Tki
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InBl  DEFL_MACRO_Tko
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InBl  DEFL_MACRO_Tkb
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputFunctor>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputFunctor, int>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputFunctor&& output_orig,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InBl DEFL_MACRO_Outf DEFL_MACRO_Tk0
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputFunctor>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputFunctor&& output_orig,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InBl DEFL_MACRO_Outf DEFL_MACRO_Tki
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputFunctor>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputFunctor&& output_orig,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InBl DEFL_MACRO_Outf DEFL_MACRO_Tko
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputFunctor>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputFunctor&& output_orig,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InBl DEFL_MACRO_Outf DEFL_MACRO_Tkb
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputIterator, int>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InBl DEFL_MACRO_OutI DEFL_MACRO_Tk0
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InBl DEFL_MACRO_OutI DEFL_MACRO_Tki
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InBl DEFL_MACRO_OutI DEFL_MACRO_Tko
-}
-
-template<typename BidirIterator,typename SizeType,typename OutputIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsOutputIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(BidirIterator&& begin,SizeType&& length,OutputIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InBl DEFL_MACRO_OutI DEFL_MACRO_Tkb
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator, int>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InBl DEFL_MACRO_Outr DEFL_MACRO_Tk0
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InBl DEFL_MACRO_Outr DEFL_MACRO_Tki
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InBl DEFL_MACRO_Outr DEFL_MACRO_Tko
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InBl DEFL_MACRO_Outr DEFL_MACRO_Tkb
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator && DeflIsSizeType2, int>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InBl DEFL_MACRO_Outrl DEFL_MACRO_Tk0
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InBl DEFL_MACRO_Outrl DEFL_MACRO_Tki
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InBl DEFL_MACRO_Outrl DEFL_MACRO_Tko
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InBl DEFL_MACRO_Outrl DEFL_MACRO_Tkb
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator, int>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InBl DEFL_MACRO_Outr2 DEFL_MACRO_Tk0
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InBl DEFL_MACRO_Outr2 DEFL_MACRO_Tki
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InBl DEFL_MACRO_Outr2 DEFL_MACRO_Tko
-}
-
-template<typename BidirIterator,typename SizeType,typename RandomAccessIterator>
-std::enable_if_t<DeflIsBidirIterator && DeflIsSizeType && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(BidirIterator&& begin,SizeType&& length,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InBl DEFL_MACRO_Outr2 DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, int>
-    Deflate(ForwardIterator&& begin,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 0 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InF  DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 0 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InF  DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 0 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InF  DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 0 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InF  DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor, int>
-    Deflate(ForwardIterator&& begin,OutputFunctor&& output_orig,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 0 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InF DEFL_MACRO_Outf DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,OutputFunctor&& output_orig,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 0 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InF DEFL_MACRO_Outf DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,OutputFunctor&& output_orig,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 0 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InF DEFL_MACRO_Outf DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,OutputFunctor&& output_orig,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 0 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InF DEFL_MACRO_Outf DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename OutputIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputIterator, int>
-    Deflate(ForwardIterator&& begin,OutputIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 0 | 0;
-DEFL_MACRO_InF DEFL_MACRO_OutI DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename OutputIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,OutputIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 0 | 0;
-DEFL_MACRO_InF DEFL_MACRO_OutI DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename OutputIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,OutputIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 0 | 0;
-DEFL_MACRO_InF DEFL_MACRO_OutI DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename OutputIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,OutputIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 0 | 0;
-DEFL_MACRO_InF DEFL_MACRO_OutI DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, int>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 0 | 0;
-DEFL_MACRO_InF DEFL_MACRO_Outr DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 0 | 0;
-DEFL_MACRO_InF DEFL_MACRO_Outr DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 0 | 0;
-DEFL_MACRO_InF DEFL_MACRO_Outr DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 0 | 0;
-DEFL_MACRO_InF DEFL_MACRO_Outr DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, int>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 0 | 2;
-DEFL_MACRO_InF DEFL_MACRO_Outrl DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 0 | 2;
-DEFL_MACRO_InF DEFL_MACRO_Outrl DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 0 | 2;
-DEFL_MACRO_InF DEFL_MACRO_Outrl DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 0 | 2;
-DEFL_MACRO_InF DEFL_MACRO_Outrl DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, int>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 0 | 2;
-DEFL_MACRO_InF DEFL_MACRO_Outr2 DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 0 | 2;
-DEFL_MACRO_InF DEFL_MACRO_Outr2 DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 0 | 2;
-DEFL_MACRO_InF DEFL_MACRO_Outr2 DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 0 | 2;
-DEFL_MACRO_InF DEFL_MACRO_Outr2 DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, int>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InF2  DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InF2  DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InF2  DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename OutputFunctor,typename WindowFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor && DeflIsWindowFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputFunctor&& output,WindowFunctor&& outputcopy,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | (DeflOutputAbortable_OutputFunctor & DeflOutputAbortable_WindowFunctor);
-DEFL_MACRO_InF2  DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor, int>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputFunctor&& output_orig,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InF2 DEFL_MACRO_Outf DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputFunctor&& output_orig,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InF2 DEFL_MACRO_Outf DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputFunctor&& output_orig,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InF2 DEFL_MACRO_Outf DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename OutputFunctor>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputFunctor, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputFunctor&& output_orig,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | DeflOutputAbortable_OutputFunctor;
-DEFL_MACRO_InF2 DEFL_MACRO_Outf DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename OutputIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputIterator, int>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InF2 DEFL_MACRO_OutI DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename OutputIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InF2 DEFL_MACRO_OutI DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename OutputIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InF2 DEFL_MACRO_OutI DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename OutputIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsOutputIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,OutputIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InF2 DEFL_MACRO_OutI DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, int>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InF2 DEFL_MACRO_Outr DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InF2 DEFL_MACRO_Outr DEFL_MACRO_Tki
+/*
+`InputParams` may be one of the following sets of parameters:
+
+* InputFunctor   input                                   `(5)` `(14)`
+* InputIterator  begin                                   `(7)` `(14)`
+* InputIterator  begin, InputIterator end                `(6)` `(14)`
+* InputIterator  begin, SizeType length                  `(8)` `(14)`
+* BidirectionalIterator begin, SizeType length           `(8)` `(15)`
+* ForwardIterator       begin                            `(7)` `(14)`
+* BidirectionalIterator begin                            `(7)` `(15)`
+* RandomAccessIterator  begin                            `(7)` `(15)`
+* ForwardIterator       begin, ForwardIterator       end `(6)` `(15)`
+* BidirectionalIterator begin, BidirectionalIterator end `(6)` `(15)`
+* RandomAccessIterator  begin, RandomAccessIterator  end `(6)` `(15)`
+
+`OutputParams` may be one of the following sets of parameters:
+
+* OutputFunctor        output                          `(1)` `(9)`
+* OutputFunctor        output, WindowFunctor window    `(2)`
+* OutputIterator       target                          `(9)`
+* RandomAccessIterator target                                           `(10)`
+* RandomAccessIterator target,   SizeType target_limit            `(3)` `(10)`
+* RandomAccessIterator target,   RandomAccessIterator target_end  `(4)` `(10)`
+*/
+
+namespace gunzip_ns
+{
+    #ifdef DEFLATE_ALLOCATION_AUTOMATIC
+        #define DeflDeclWindow gunzip_ns::DeflateWindow window;
+    #elif defined(DEFLATE_ALLOCATION_STATIC)
+        #define DeflDeclWindow auto& window = gunzip_ns::GetStaticObj<gunzip_ns::DeflateWindow>();
+    #elif defined(DEFLATE_ALLOCATION_DYNAMIC)
+        #define DeflDeclWindow std::unique_ptr<gunzip_ns::DeflateWindow> winptr(new gunzip_ns::DeflateWindow); \
+                               auto& window = *winptr;
+    #endif
+
+    template<unsigned char code, typename I,typename O,typename C,typename B>
+    auto DeflateDispatchFinal(I&& i, O&& o, C&& c, B&& b)
+    {
+        if constexpr(code & (Flag_TrackIn | Flag_TrackOut))
+        {
+            //fprintf(stderr, "both track flag\n");
+            SizeTracker<DeflateTrackBothSize> tracker;
+            return tracker(Gunzip<code & Flag_NoTrackFlagMask>
+                (tracker.template ForwardInput(i), tracker.template ForwardOutput(o), tracker.template ForwardWindow(c), std::forward<B>(b)));
+        }
+        else if constexpr(code & Flag_TrackIn)
+        {
+            //fprintf(stderr, "in track flag\n");
+            SizeTracker<DeflateTrackInSize> tracker;
+            return tracker(Gunzip<code & Flag_NoTrackFlagMask>
+                (tracker.template ForwardInput(i),std::forward<O>(o),std::forward<C>(c),std::forward<B>(b)));
+        }
+        else if constexpr(code & Flag_TrackOut)
+        {
+            //fprintf(stderr, "out track flag\n");
+            SizeTracker<DeflateTrackOutSize> tracker;
+            return tracker(Gunzip<code & Flag_NoTrackFlagMask>
+                (std::forward<I>(i), tracker.template ForwardOutput(o), tracker.template ForwardWindow(c), std::forward<B>(b)));
+        }
+        else
+        {
+            //fprintf(stderr, "no track flag\n");
+            return Gunzip<code & Flag_NoTrackFlagMask>(std::forward<I>(i),std::forward<O>(o),std::forward<C>(c),std::forward<B>(b));
+        }
+    }
+
+    // One-parameter output dispatch:
+    template<unsigned char code, typename BtFun, typename InFun, typename T1>
+    auto DeflateOutputDispatch(BtFun&& bt, InFun&& infun, T1&& param1)
+    {
+        // Is param1 a random access iterator?
+        if constexpr(is_random_iterator_v<T1>)
+        {
+            //fprintf(stderr, "random iterator\n");
+            auto output     = [&](unsigned char l) { *param1 = l; ++param1; };
+            auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs)
+            {
+                /* length=0 means that offs is the size of the window. */
+                for(; length--; ++param1) { *param1 = *(param1-offs); }
+            };
+            return DeflateDispatchFinal<code>(std::forward<InFun>(infun), output, outputcopy, std::forward<BtFun>(bt));
+        }
+        // Is param1 an output iterator?
+        else if constexpr(is_output_iterator_v<T1>)
+        {
+            //fprintf(stderr, "output iterator\n");
+            DeflDeclWindow
+            auto output = [&](unsigned char l)
+            {
+                window.Data[window.Head++ % MAX_WINDOW_SIZE] = l;
+                *param1 = l; ++param1;
+            };
+            auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs)
+            {
+                /* length=0 means that offs is the size of the window. */
+                for(; length>0; --length)
+                {
+                    unsigned char byte = window.Data[(window.Head - offs) % MAX_WINDOW_SIZE];
+                    output(byte);
+                }
+                return false;
+            };
+            return DeflateDispatchFinal<code>(std::forward<InFun>(infun), output, outputcopy, std::forward<BtFun>(bt));
+        }
+        // param1 must be an output functor, then.
+        else if constexpr(is_output_functor_v<T1>)
+        {
+            //fprintf(stderr, "output functor\n");
+            DeflDeclWindow
+            auto output = [&](unsigned char l)
+            {
+                window.Data[window.Head++ % MAX_WINDOW_SIZE] = l;
+                return param1(l);
+            };
+            auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs)
+            {
+                /* length=0 means that offs is the size of the window. */
+                for(; length>0; --length)
+                {
+                    unsigned char byte = window.Data[(window.Head - offs) % MAX_WINDOW_SIZE];
+                    if(OutputHelper<DeflAbortable_OutFun<T1>>::output(output, byte))
+                        break;
+                }
+                return length;
+            };
+            return DeflateDispatchFinal
+                <code | (DeflAbortable_OutFun<T1> ? Flag_OutputAbortable : 0)>
+                (std::forward<InFun>(infun), output, outputcopy, std::forward<BtFun>(bt));
+        }
+        else
+        {
+            //fprintf(stderr, "unreached code 1\n");
+            static_assert(code==0xFF, "Deflate: Unknown output parameter type");
+        }
+    }
+
+    // Two-parameter output dispatch:
+    template<unsigned char code, typename BtFun, typename InFun, typename T1, typename T2>
+    auto DeflateOutputDispatch(BtFun&& bt, InFun&& infun, T1&& param1, T2&& param2)
+    {
+        if constexpr(std::is_same_v<remove_cvref_t<T2>, DeflateTrackNoSize>)
+        {
+            //fprintf(stderr, "no track flag...\n");
+            return DeflateOutputDispatch<code> (std::forward<BtFun>(bt), std::forward<InFun>(infun), std::forward<T1>(param1));
+        }
+        else if constexpr(std::is_same_v<remove_cvref_t<T2>, DeflateTrackInSize>)
+        {
+            //fprintf(stderr, "in track flag...\n");
+            return DeflateOutputDispatch<code | Flag_TrackIn> (std::forward<BtFun>(bt), std::forward<InFun>(infun), std::forward<T1>(param1));
+        }
+        else if constexpr(std::is_same_v<remove_cvref_t<T2>, DeflateTrackOutSize>)
+        {
+            //fprintf(stderr, "out track flag...\n");
+            return DeflateOutputDispatch<code | Flag_TrackOut> (std::forward<BtFun>(bt), std::forward<InFun>(infun), std::forward<T1>(param1));
+        }
+        else if constexpr(std::is_same_v<remove_cvref_t<T2>, DeflateTrackBothSize>)
+        {
+            //fprintf(stderr, "both track flag...\n");
+            return DeflateOutputDispatch<code | Flag_TrackIn | Flag_TrackOut> (std::forward<BtFun>(bt), std::forward<InFun>(infun), std::forward<T1>(param1));
+        }
+        // Are param1 and param2 both random access iterators?
+        else if constexpr(std::is_same_v<T1,T2> && is_random_iterator_v<T1>)
+        {
+            //fprintf(stderr, "random iterator + random iterator\n");
+            auto output = [&](unsigned char l)
+            {
+                if(param1 == param2) return true;
+                *param1 = l; ++param1;
+                return false;
+            };
+            auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs)
+            {
+                /* length=0 means that offs is the size of the window. */
+                for(; length > 0 && !(param1 == param2); --length, ++param1)
+                {
+                    *param1 = *(param1 - offs);
+                }
+                return length;
+            };
+            return DeflateDispatchFinal<code | Flag_OutputAbortable>(std::forward<InFun>(infun), output, outputcopy, std::forward<BtFun>(bt));
+        }
+        // Is param1 a random access iterator and param2 a size?
+        else if constexpr(is_size_type_v<T2> && is_random_iterator_v<T1>)
+        {
+            //fprintf(stderr, "random iterator + size\n");
+            typename std::iterator_traits<remove_cvref_t<T1>>::difference_type used{}, cap=param2;
+            auto output = [&](unsigned char l)
+            {
+                if(used >= cap) return true;
+                param1[used] = l; ++used;
+                return false;
+            };
+            auto outputcopy = [&](std::uint_least16_t length, std::uint_fast32_t offs)
+            {
+                /* length=0 means that offs is the size of the window. */
+                for(; length > 0 && used < cap; ++used, --length)
+                {
+                    param1[used] = param1[used - offs];
+                }
+                return length;
+            };
+            return DeflateDispatchFinal<code | Flag_OutputAbortable>(std::forward<InFun>(infun), output, outputcopy, std::forward<BtFun>(bt));
+        }
+        // Then, param1 must be an output functor and param2 a window functor.
+        else if constexpr(is_output_functor_v<T1> && is_window_functor_v<T2>)
+        {
+            //fprintf(stderr, "output functor + window functor\n");
+            return DeflateDispatchFinal
+                <code | ( (DeflAbortable_OutFun<T1> && DeflAbortable_WinFun<T2>) ? Flag_OutputAbortable : 0 ) >
+                (std::forward<InFun>(infun), std::forward<T1>(param1), std::forward<T2>(param2), std::forward<BtFun>(bt));
+        }
+        else
+        {
+            //fprintf(stderr, "unreached code 2\n");
+            static_assert(code==0xFF, "Deflate: Unknown output parameter type");
+        }
+    }
+
+    // Three-parameter output dispatch:
+    template<unsigned char code, typename BtFun, typename InFun, typename T1, typename T2, typename T3>
+    auto DeflateOutputDispatch(BtFun&& bt, InFun&& infun, T1&& p1, T2&& p2, T3)
+    {
+        if constexpr(std::is_same_v<remove_cvref_t<T3>, DeflateTrackNoSize>)
+        {
+            //fprintf(stderr, "no track flag...\n");
+            return DeflateOutputDispatch<code> (std::forward<BtFun>(bt), std::forward<InFun>(infun), std::forward<T1>(p1), std::forward<T2>(p2));
+        }
+        else if constexpr(std::is_same_v<remove_cvref_t<T3>, DeflateTrackInSize>)
+        {
+            //fprintf(stderr, "in track flag...\n");
+            return DeflateOutputDispatch<code | Flag_TrackIn> (std::forward<BtFun>(bt), std::forward<InFun>(infun), std::forward<T1>(p1), std::forward<T2>(p2));
+        }
+        else if constexpr(std::is_same_v<remove_cvref_t<T3>, DeflateTrackOutSize>)
+        {
+            //fprintf(stderr, "out track flag...\n");
+            return DeflateOutputDispatch<code | Flag_TrackOut> (std::forward<BtFun>(bt), std::forward<InFun>(infun), std::forward<T1>(p1), std::forward<T2>(p2));
+        }
+        else if constexpr(std::is_same_v<remove_cvref_t<T3>, DeflateTrackBothSize>)
+        {
+            //fprintf(stderr, "both track flag...\n");
+            return DeflateOutputDispatch<code | Flag_TrackIn | Flag_TrackOut> (std::forward<BtFun>(bt), std::forward<InFun>(infun), std::forward<T1>(p1), std::forward<T2>(p2));
+        }
+        else
+        {
+            //fprintf(stderr, "unreached code 3\n");
+            static_assert(code==0xFF, "Deflate: Mismatched parameters. Expected last parameter to be a DeflateTrack option.");
+        }
+    }
+
+    // One or two parameter input dispatch:
+    template<unsigned char code, typename BtFun, typename T1, typename T2, typename... T>
+    auto DeflateInputDispatch(BtFun&& bt, T1&& param1, T2&& param2, T&&... args)
+    {
+        using namespace gunzip_ns;
+        // Are param1 and param2 an input iterator pair?
+        if constexpr(std::is_same_v<T1, T2> && is_input_iterator_v<T1>)
+        {
+            //fprintf(stderr, "input iterator + input iterator\n");
+            auto inputfun = [&]() -> std::common_type_t<int, decltype(*param1)>
+                            { if(param1 == param2) { return -1; } int r = *param1; ++param1; return r; };
+            return DeflateOutputDispatch<code|Flag_InputAbortable>(std::forward<BtFun>(bt),  inputfun, std::forward<T>(args)...);
+        }
+        // Are param1 and param2 a pair of bidirectional input iterators (forward, bidir, random)?
+        else if constexpr(std::is_same_v<T1, T2> && is_bidir_input_v<T1>)
+        {
+            //fprintf(stderr, "bidir input + bidir input\n");
+            remove_cvref_t<T1> saved{param1};
+            auto btfun    = [&](bool act) { if(act) param1 = saved; else saved = std::move(param1); };
+            auto inputfun = [&]() -> std::common_type_t<int, decltype(*param1)>
+                            { if(param1 == param2) { return -1; } int r = *param1; ++param1; return r; };
+            return DeflateOutputDispatch<code|Flag_InputAbortable>(btfun, inputfun, std::forward<T>(args)...);
+        }
+        // Is param1 an input iterator and param2 a size?
+        else if constexpr(is_size_type_v<T2> && is_input_iterator_v<T1>)
+        {
+            //fprintf(stderr, "input iterator + size\n");
+            typename std::iterator_traits<remove_cvref_t<T1>>::difference_type remain{param2};
+            auto inputfun = [&]() -> std::common_type_t<int, decltype(*param1)>
+                            { if(!remain) return -1; --remain; int r = *param1; ++param1; return r; };
+            return DeflateOutputDispatch<code|Flag_InputAbortable>(std::forward<BtFun>(bt),  inputfun, std::forward<T>(args)...);
+        }
+        // Is param1 a bidirectional input iterator (forward, bidir, random) and param2 a size?
+        else if constexpr(is_size_type_v<T2> && is_bidir_input_v<T1>)
+        {
+            //fprintf(stderr, "bidir input + size\n");
+            typename std::iterator_traits<remove_cvref_t<T1>>::difference_type remain{param2}, savestate{};
+            auto btfun    = [&](bool act) { if(act) { param1 -= (savestate-remain); remain = savestate; } else savestate = remain; };
+            auto inputfun = [&]() -> std::common_type_t<int, decltype(*param1)>
+                            { if(!remain) return -1; --remain; int r = *param1; ++param1; return r; };
+            return DeflateOutputDispatch<code|Flag_InputAbortable>(btfun, inputfun, std::forward<T>(args)...);
+        }
+        // Is param1 an input iterator?
+        else if constexpr(is_input_iterator_v<T1>)
+        {
+            //fprintf(stderr, "input iterator\n");
+            auto inputfun = [&]() -> std::remove_cv_t<decltype(*param1)> { auto r = *param1; ++param1; return r; };
+            return DeflateOutputDispatch
+                <code | ( is_abortable_input_type_v<remove_cvref_t<decltype(*param1)>> ? Flag_InputAbortable : 0 ) >
+                (std::forward<BtFun>(bt),  inputfun, std::forward<T2>(param2), std::forward<T>(args)...);
+        }
+        // Is param1 a bidirectional input iterator (forward, bidir, random)?
+        else if constexpr(is_bidir_input_v<T1>)
+        {
+            //fprintf(stderr, "bidir input\n");
+            remove_cvref_t<T1> saved{param1};
+            auto btfun    = [&](bool act) { if(act) param1 = saved; else saved = std::move(param1); };
+            auto inputfun = [&]() -> std::remove_cv_t<decltype(*param1)> { auto r = *param1; ++param1; return r; };
+            return DeflateOutputDispatch<code>(btfun, inputfun, std::forward<T2>(param2), std::forward<T>(args)...);
+        }
+        // param1 must be an input functor, then. Let's move on to param2 testing!
+        else if constexpr(is_input_functor_v<T1>)
+        {
+            //fprintf(stderr, "input functor\n");
+            return DeflateOutputDispatch
+                <code | ( DeflAbortable_InFun<T1> ? Flag_InputAbortable : 0 ) >
+                (std::forward<BtFun>(bt),  std::forward<T1>(param1), std::forward<T2>(param2), std::forward<T>(args)...);
+        }
+        else
+        {
+            //fprintf(stderr, "unreached code 0\n");
+            static_assert(code==0xFF, "Deflate: Mismatched parameters. Expected something for an input.");
+        }
+    }
+    #undef DeflDeclWindow
+}
+
+
+template<typename... T>
+auto Deflate(T&&... args)
+{
+    return gunzip_ns::DeflateInputDispatch<0>(gunzip_ns::dummy{}, std::forward<T>(args)...);
 }
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InF2 DEFL_MACRO_Outr DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 0;
-DEFL_MACRO_InF2 DEFL_MACRO_Outr DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, int>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InF2 DEFL_MACRO_Outrl DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InF2 DEFL_MACRO_Outrl DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InF2 DEFL_MACRO_Outrl DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator,typename SizeType2>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator && DeflIsSizeType2, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target,SizeType2&& target_limit,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InF2 DEFL_MACRO_Outrl DEFL_MACRO_Tkb
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, int>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackNoSize = {})
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InF2 DEFL_MACRO_Outr2 DEFL_MACRO_Tk0
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackInSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InF2 DEFL_MACRO_Outr2 DEFL_MACRO_Tki
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::uint_fast64_t>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackOutSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InF2 DEFL_MACRO_Outr2 DEFL_MACRO_Tko
-}
-
-template<typename ForwardIterator,typename RandomAccessIterator>
-std::enable_if_t<DeflIsForwardIterator && DeflIsRandomAccessIterator, std::pair<int, std::pair<std::uint_fast64_t,std::uint_fast64_t>>>
-    Deflate(ForwardIterator&& begin,ForwardIterator&& end,RandomAccessIterator&& target_begin,RandomAccessIterator&& target_end,DeflateTrackBothSize)
-{
-constexpr unsigned char Abortable = 1 | 2;
-DEFL_MACRO_InF2 DEFL_MACRO_Outr2 DEFL_MACRO_Tkb
-}
-
-#undef DEFL_MACRO_Inf
-#undef DEFL_MACRO_InI
-#undef DEFL_MACRO_InI2
-#undef DEFL_MACRO_InIl
-#undef DEFL_MACRO_InBl
-#undef DEFL_MACRO_InF
-#undef DEFL_MACRO_InF2
-#undef DEFL_MACRO_Outf
-#undef DEFL_MACRO_OutI
-#undef DEFL_MACRO_Outr
-#undef DEFL_MACRO_Outrl
-#undef DEFL_MACRO_Outr2
-#undef DEFL_MACRO_Tk0
-#undef DEFL_MACRO_Tki
-#undef DEFL_MACRO_Tko
-#undef DEFL_MACRO_Tkb
-
-#undef DeflDeclWindow
-#undef DeflIsWindowFunctor
-#undef DeflIsInputFunctor
-#undef DeflIsWindowFunctor
-#undef DeflIsBacktrackFunctor
-#undef DeflIsRandomAccessIterator
-#undef DeflIsForwardIterator
-#undef DeflIsBidirIterator
-#undef DeflIsInputIterator
-#undef DeflIsOutputIterator
-#undef DeflIsSizeType
-#undef DeflIsSizeType2
-#undef DeflInputAbortable_InputFunctor
-#undef DeflOutputAbortable_OutputFunctor
-#undef DeflOutputAbortable_WindowFunctor
