@@ -75,6 +75,8 @@ struct DeflateTrackBothSize: public DeflateTrackTagBase{};
 // The rest of the file is just for the curious about implementation.
 namespace gunzip_ns
 {
+    //#define DO_DEFDB_DUMPING
+
     // If you want more performance at the expense of RAM use,
     // Turn one or more of these settings to false:
     static constexpr bool USE_BITARRAY_TEMPORARY_IN_HUFFMAN_CREATION = false; /* 8 bytes save */
@@ -317,7 +319,12 @@ namespace gunzip_ns
                 largest_treetable_value = std::max(largest_treetable_value, v);
                 longest_length          = std::max(longest_length, unsigned(length));
             #endif
+                //fprintf(stderr, " [%d]%3d CLL (val: %d)\n", length, v, v);
                 tree.Set(0 + length-1, v);
+            }
+            else
+            {
+                //fprintf(stderr, " [_]%3d CLL (val: 0)\n", 0);
             }
         }
 
@@ -346,6 +353,7 @@ namespace gunzip_ns
                 largest_treetrans_value = std::max(largest_treetrans_value, value);
         #endif
                 assert(q < num_values /*&& value < num_values*/);
+                //fprintf(stderr, " [x]%3d CLL %d\n", 15+q, value);
                 tree.Set(15 + q, value);
             }
         }
@@ -618,6 +626,9 @@ namespace gunzip_ns
         inline result operator() (int returncode) const { return result{returncode,std::make_pair(insize,outsize)}; }
     };
 
+    #ifdef DO_DEFDB_DUMPING
+    unsigned bitcounter=0;
+    #endif
     struct DeflateBitCache
     {
         std::uint_least8_t BitCache = 0, BitCount = 0;
@@ -625,6 +636,9 @@ namespace gunzip_ns
         template<bool Abortable, typename InputFunctor>
         std::uint_least64_t GetBits(InputFunctor&& input, unsigned numbits)
         {
+            #ifdef DO_DEFDB_DUMPING
+            bitcounter += numbits;
+            #endif
             std::uint_fast64_t result = BitCache;
             if(numbits <= BitCount)
             {
@@ -711,12 +725,20 @@ namespace gunzip_ns
         //                                total 482.91 bytes
 
         template<bool Abortable, typename InputFunctor, typename BacktrackFunctor>
-        auto DynTreeFunc(InputFunctor&& input, std::uint_fast16_t length, BacktrackFunctor&& /*backtrack*/)
+        auto DynTreeFunc(InputFunctor&& input, std::uint_fast16_t length, BacktrackFunctor&& /*backtrack*/,
+                         bool
+                         #ifdef DO_DEFDB_DUMPING
+                             dists
+                         #endif
+                         )
         {
             Lengths = {}; // clear at least length nibbles; easiest to clear it all
             bool error = false;
             for(std::uint_fast16_t code = 0; ; )
             {
+                #ifdef DO_DEFDB_DUMPING
+                unsigned bits_before=bitcounter;
+                #endif
                 if(!num)
                 {
                     auto p = HuffRead<Abortable>(std::forward<InputFunctor>(input), lltree);
@@ -725,14 +747,38 @@ namespace gunzip_ns
 
                     if(!(what & 16))    { lencode = what * 0x11u;           what = 0x01; } // 1 times (what < 16) (use what, set prev)
                     else if(what < 17)  { lencode = (lencode >> 4) * 0x11u; what = 0x23; } // 3..6 (use prev)
-                    else if(what == 17) { lencode &= 0xF0;                  what = 0x33; } // 3..10   (use 0)
-                    else                { lencode &= 0xF0;                  what = 0x7B; } // 11..138 (use 0)
+                    else if(what == 17) { lencode = 0;                      what = 0x33; } // 3..10   (use 0, set prev)
+                    else                { lencode = 0;                      what = 0x7B; } // 11..138 (use 0, set prev)
 
                     p = GetBits<Abortable>(std::forward<InputFunctor>(input), what >> 4); // 0, 2, 3 or 7 bits
+                    #ifdef DO_DEFDB_DUMPING
+                    if(what>>4)
+                    {
+                        char tmp[64]="[_]"; sprintf(tmp, "[%d]", int(bitcounter-bits_before));
+                        fprintf(stderr, "%4s %cREP (%d times)\n", tmp, (lencode&0xF)?'L':'Z', p+(what&0xF));
+                    }
+                    #endif
+
                     if(Abortable && !~p) { error = true; goto done; }
                     num = p + (what & 0xF); // 1..138
                 }
+
+                #ifdef DO_DEFDB_DUMPING
+                bool rep=num>1;
+                #endif
                 do {
+                    #ifdef DO_DEFDB_DUMPING
+                    char tmp[64]="[_]"; if(!rep) sprintf(tmp, "[%d]", int(bitcounter-bits_before));
+                    if(code == 0x100)
+                        fprintf(stderr, "%4s EofB CL (val:%2d)\n", tmp, int(lencode&0xF));
+                    else if(dists)
+                        fprintf(stderr, "%4s d_%02d CL (val:%2d)\n", tmp, int(code), int(lencode&0xF));
+                    else if(code > 0x100)
+                        fprintf(stderr, "%4s l_%02d CL (val:%2d)\n", tmp, int(code-0x101), int(lencode&0xF));
+                    else
+                        fprintf(stderr, "%4s 0x%02X CL (val:%2d)\n", tmp, (int)code, int(lencode&0xF));
+                    #endif
+
                     --num;
                     Lengths.QSet(code++, lencode & 0xF);
                     if(code == length) { goto done; }
@@ -776,7 +822,12 @@ namespace gunzip_ns
         std::uint_least8_t checkpoint_BitCache, checkpoint_BitCount;
 
         template<bool Abortable, typename InputFunctor, typename BacktrackFunctor>
-        auto DynTreeFunc(InputFunctor&& input, std::uint_fast16_t /*length*/, BacktrackFunctor&& backtrack)
+        auto DynTreeFunc(InputFunctor&& input, std::uint_fast16_t /*length*/, BacktrackFunctor&& backtrack,
+                         bool
+                         #ifdef DO_DEFDB_DUMPING
+                             dists
+                         #endif
+                         )
         {
             // Create checkpoint
             checkpoint_lencode  = 0;
@@ -802,7 +853,7 @@ namespace gunzip_ns
                 if(!num)
                 {
                     auto p = HuffRead<Abortable>(std::forward<InputFunctor>(input), lltree);
-                    if(Abortable && !~p) { num = 0xFF; return -1; }
+                    if(Abortable && !~p) { num = 0xFF; return -1; } // If p== ~uint64_t()
                     std::uint_least8_t what = p; // 0-18
 
                     if(!(what & 16))    { lencode = what * 0x11u;           what = 0x01; } // 1 times (what < 16) (use what, set prev)
@@ -811,7 +862,8 @@ namespace gunzip_ns
                     else                { lencode &= 0xF0;                  what = 0x7B; } // 11..138 (use 0)
 
                     p = GetBits<Abortable>(std::forward<InputFunctor>(input), what >> 4); // 0, 2, 3 or 7 bits
-                    if(Abortable && !~p) { num = 0xFF; return -1; }
+
+                    if(Abortable && !~p) { num = 0xFF; return -1; } // If p== ~uint64_t()
                     num = p + (what & 0xF); // 1..138
                 }
                 --num;
@@ -921,6 +973,7 @@ namespace gunzip_ns
         for(;;)
         {
             GetBits(3, header);
+            //fprintf(stderr, "header=%d\n", header);
             if(header & 4) // Dynamic block
             {
                 Fail_If(header & 2);
@@ -930,15 +983,30 @@ namespace gunzip_ns
                 #define nlen  (((nlen_ndist_ncode >> 0u) & 0x1Fu) + 257u) // 257..288
                 #define ndist (((nlen_ndist_ncode >> 5u) & 0x1Fu) + 1u)   // 1..32
 
+
                 std::uint_least8_t ncode = ((nlen_ndist_ncode >> 10u) + 4u); // 4..19
                 {std::uint_fast64_t lenlens; GetBits(ncode*3, lenlens);      // Max: 19*3 = 57 bits
+                #ifdef DO_DEFDB_DUMPING
+                fprintf(stderr, " [5] HLIT%5d (val:%d)\n [5] HDIST%4d (val:%d)\n [4] HCLEN%4d (val:%d)\n",
+                    nlen,nlen-257, ndist,ndist-1, ncode,ncode-4);
+                for(unsigned a=0; a<19; ++a)
+                    for(unsigned b=0; b<19; ++b)
+                        if(rshift(b) == 3*a)
+                        {
+                            if(a < ncode)
+                                fprintf(stderr, " [3]%3d CLL (val: %d)\n", b, int((lenlens >> rshift(b)) & 7));
+                            else
+                                fprintf(stderr, " [_]%3d CLL (val: %d)\n", b, int((lenlens >> rshift(b)) & 7));
+                        }
+                #endif
+
                 auto lltree_fun = [=](unsigned a) -> unsigned char { return (lenlens >> rshift(a)) & 7; };
                 while(CreateHuffmanTree<bool(Abortable&Flag_InputAbortable)>("Len Lengths", state.lltree, 19, lltree_fun)) { return -2; }}
 
-                {auto ltree_fun = state.template DynTreeFunc<bool(Abortable&Flag_InputAbortable)>(std::forward<InputFunctor>(input), nlen, std::forward<BacktrackFunctor>(backtrack));
+                {auto ltree_fun = state.template DynTreeFunc<bool(Abortable&Flag_InputAbortable)>(std::forward<InputFunctor>(input), nlen, std::forward<BacktrackFunctor>(backtrack), false);
                 while(CreateHuffmanTree<bool(Abortable&Flag_InputAbortable)>("Dyn Lengths", state.ltree, nlen, ltree_fun)) { return -2; }}
 
-                {auto dtree_fun = state.template DynTreeFunc<bool(Abortable&Flag_InputAbortable)>(std::forward<InputFunctor>(input), ndist, std::forward<BacktrackFunctor>(backtrack));
+                {auto dtree_fun = state.template DynTreeFunc<bool(Abortable&Flag_InputAbortable)>(std::forward<InputFunctor>(input), ndist, std::forward<BacktrackFunctor>(backtrack), true);
                 while(CreateHuffmanTree<bool(Abortable&Flag_InputAbortable)>("Dyn Dists",   state.dtree, ndist, dtree_fun)) { return -2; }}
 
                 #undef nlen
@@ -951,6 +1019,9 @@ namespace gunzip_ns
                     DummyGetBits(state.BitCount%8); // Go to byte boundary (discard a few bits)
                     GetBits(32, std::uint_least32_t a);
                     Fail_If(((a ^ (a >> 16)) & 0xFFFF) != 0xFFFF);
+                    #ifdef DO_DEFDB_DUMPING
+                    fprintf(stderr, "raw block of %d bytes (0x%X)\n", (unsigned short)a, a);
+                    #endif
                     // Note: It is valid for (lower 16 bits of) "a" to be 0 here.
                     // It is sometimes used for aligning the stream to byte boundary.
                     while(a-- & 0xFFFF)
@@ -969,9 +1040,15 @@ namespace gunzip_ns
             // Do actual deflating.
             for(;;)
             {
+                #ifdef DO_DEFDB_DUMPING
+                unsigned a=bitcounter;
+                #endif
                 HuffRead(state.ltree, std::uint_least16_t lencode); // 0..287
                 if(!(lencode & -256)) // 0..255: literal byte
                 {
+                    #ifdef DO_DEFDB_DUMPING
+                    {char tmp[64];sprintf(tmp,"[%d]",bitcounter-a); fprintf(stderr, "%4s %02X\n", tmp, lencode);}
+                    #endif
                     while(OutputHelper<bool(Abortable&Flag_OutputAbortable)>::output(output, lencode)) { return -3; }
                 }
                 else if(!(lencode & 0xFF)) break; // 256=end
@@ -980,6 +1057,9 @@ namespace gunzip_ns
                     GetBits(lbits(lencode), std::uint_least16_t length); length += lbase(lencode);
                     {HuffRead(state.dtree, std::uint_least8_t distcode); // Read distance code (0..31)
                     {GetBits(dbits(distcode), std::uint_least32_t offset); offset += dbase(distcode);
+                    #ifdef DO_DEFDB_DUMPING
+                    {char tmp[64];sprintf(tmp,"[%d]",bitcounter-a); fprintf(stderr, "%4s (%d,%d)\n", tmp,length,offset);}
+                    #endif
                     while(OutputHelper<bool(Abortable&Flag_OutputAbortable)>::outputcopy(outputcopy,length,offset)) { return -4; }}}
                 }
             }
