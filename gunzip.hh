@@ -774,7 +774,7 @@ namespace gunzip_ns
                     else if(dists)
                         fprintf(stderr, "%4s d_%02d CL (val:%2d)\n", tmp, int(code), int(lencode&0xF));
                     else if(code > 0x100)
-                        fprintf(stderr, "%4s l_%02d CL (val:%2d)\n", tmp, int(code-0x101), int(lencode&0xF));
+                        fprintf(stderr, "%4s l_%02d CL (val:%2d)\n", tmp, int(code- 0x101), int(lencode&0xF));
                     else
                         fprintf(stderr, "%4s 0x%02X CL (val:%2d)\n", tmp, (int)code, int(lencode&0xF));
                     #endif
@@ -858,8 +858,8 @@ namespace gunzip_ns
 
                     if(!(what & 16))    { lencode = what * 0x11u;           what = 0x01; } // 1 times (what < 16) (use what, set prev)
                     else if(what < 17)  { lencode = (lencode >> 4) * 0x11u; what = 0x23; } // 3..6 (use prev)
-                    else if(what == 17) { lencode &= 0xF0;                  what = 0x33; } // 3..10   (use 0)
-                    else                { lencode &= 0xF0;                  what = 0x7B; } // 11..138 (use 0)
+                    else if(what == 17) { lencode = 0;                      what = 0x33; } // 3..10   (use 0, set prev)
+                    else                { lencode = 0;                      what = 0x7B; } // 11..138 (use 0, set prev)
 
                     p = GetBits<Abortable>(std::forward<InputFunctor>(input), what >> 4); // 0, 2, 3 or 7 bits
 
