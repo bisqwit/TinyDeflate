@@ -419,8 +419,24 @@ namespace gunzip_ns
     // dbits+lbits with table  12+16+29 = 57   12+16+29 = 57   17+21+29 = 67
     // dbits+lbits with func      14+18 = 32      14+18 = 32      13+20 = 33
 
+    // Support for pre-c++20
     template<typename T>
     using remove_cvref_t = std::remove_reference_t<std::remove_cv_t<T>>;
+    // Support for pre-c++20 (result_of is removed in c++20, invoke_result is added in c++17, so neither can be used exclusively)
+    template <class T>
+    struct result_of { // explain usage
+        static_assert((T)false, "result_of<CallableType> is invalid; use "
+            "result_of<CallableType(zero or more argument types)> instead.");
+    };
+    #if __cplusplus > 202000UL
+    template <typename F, typename... Args>
+    struct result_of<F(Args...)> : std::invoke_result<F, Args...> {};
+    #else
+    template <typename F, typename... Args>
+    struct result_of<F(Args...)> : std::result_of<F(Args...)> {};
+    #endif
+    template <class T>
+    using result_of_t = typename result_of<T>::type;
 
     #define BEGIN_COND(name) \
         template<typename T, typename=void> struct name : public std::false_type {}; \
@@ -432,7 +448,7 @@ namespace gunzip_ns
 
     // Input parameter condition testers:
     BEGIN_COND(is_input_functor)
-        std::is_convertible_v<std::result_of_t<remove_cvref_t<T>()>,int>
+        std::is_convertible_v<result_of_t<remove_cvref_t<T>()>,int>
     END_COND(is_input_functor)
     BEGIN_COND(is_input_iterator)
         std::is_convertible_v<typename std::iterator_traits<remove_cvref_t<T>>::value_type, unsigned char>
@@ -463,10 +479,10 @@ namespace gunzip_ns
     END_COND(is_output_iterator)
     // Output functor & window functor: Returns void or something that can be converted to bool
     BEGIN_COND(is_output_functor)
-        std::is_same_v<std::result_of_t<remove_cvref_t<T>(int)>,void> || std::is_convertible_v<std::result_of_t<remove_cvref_t<T>(int)>,bool>
+        std::is_same_v<result_of_t<remove_cvref_t<T>(int)>,void> || std::is_convertible_v<result_of_t<remove_cvref_t<T>(int)>,bool>
     END_COND(is_output_functor)
     BEGIN_COND(is_window_functor)
-        std::is_same_v<std::result_of_t<remove_cvref_t<T>(int,int)>,void> || std::is_convertible_v<std::result_of_t<remove_cvref_t<T>(int,int)>,int>
+        std::is_same_v<result_of_t<remove_cvref_t<T>(int,int)>,void> || std::is_convertible_v<result_of_t<remove_cvref_t<T>(int,int)>,int>
     END_COND(is_window_functor)
 
     BEGIN_COND(is_abortable_input_type)
@@ -477,11 +493,11 @@ namespace gunzip_ns
     #undef BEGIN_COND
 
     template<typename T>
-    constexpr bool DeflAbortable_InFun  = is_abortable_input_type_v<remove_cvref_t<std::result_of_t<T()>>>;
+    constexpr bool DeflAbortable_InFun  = is_abortable_input_type_v<remove_cvref_t<result_of_t<T()>>>;
     template<typename T>
-    constexpr bool DeflAbortable_OutFun = std::is_same_v<std::result_of_t<T(int)>, bool>;
+    constexpr bool DeflAbortable_OutFun = std::is_same_v<result_of_t<T(int)>, bool>;
     template<typename T>
-    constexpr bool DeflAbortable_WinFun = std::is_convertible_v<remove_cvref_t<std::result_of_t<T(int,int)>>, int>;
+    constexpr bool DeflAbortable_WinFun = std::is_convertible_v<remove_cvref_t<result_of_t<T(int,int)>>, int>;
 
     template<bool Abortable>
     struct OutputHelper
