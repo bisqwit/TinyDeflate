@@ -2,6 +2,7 @@
  * http://iki.fi/bisqwit/ , http://youtube.com/user/Bisqwit
  * Inspired and influenced by a 13th IOCCC winner program by Ron McFarland */
 /* Further optimized based on ideas from tinf library by Joergen Ibsen */
+/** @file gunzip.hh @brief TinyDeflate */
 
 /* Fun fact: Contains zero new/delete, and no STL data structures */
 /* Distributed under the terms of the Zlib license:
@@ -31,37 +32,37 @@
 #include <iterator>
 
 #if !1 //Documentation purposes only; the actual prototypes are littered with std::enable_ifs.
-// Deflate(): This is the public method declared (later) in this file.
-// Decompresses (inflates) deflate-compressed data, with a gzip or deflate header.
-// User-supplied functors:
-//   input() returns the next byte from the (compressed) input.
-//   output(byte) outputs one uncompressed byte.
-//   outputcopy(length, offset) copies length uncompressed bytes from offset,
-//       Offset is always >= 1.
-//       offset 1 means previous byte,
-//       offset 2 means previous before that and so on.
-//       Note that (offset < length) is not an error and in fact happens frequently.
-//       If length=0, offset indicates the largest look-behind window length that
-//       you need to be prepared for. The length is a power-of-two in range 256..32768.
+/// Deflate(): This is the public method declared (later) in this file.
+/// Decompresses (inflates) deflate-compressed data, with a gzip or deflate header.
+/// User-supplied functors:
+/// @param  input() returns the next byte from the (compressed) input.
+/// @param  output(byte) outputs one uncompressed byte.
+/// @param  outputcopy(length, offset) copies length uncompressed bytes from offset,
+///       Offset is always >= 1.
+///       offset 1 means previous byte,
+///       offset 2 means previous before that and so on.
+///       Note that (offset < length) is not an error and in fact happens frequently.
+///       If length=0, offset indicates the largest look-behind window length that
+///       you need to be prepared for. The length is a power-of-two in range 256..32768.
 //
-// If you want to implement range checking in input, return a negative value
-// from input() when there is no more input.
+/// If you want to implement range checking in input, return a negative value
+/// from input() when there is no more input.
 //
-// If you want to implement range checking in output, add a return value
-// in output(): false=ok, true=abort; and a return value in outputcopy():
-// 0=ok, nonzero=one or more bytes were not writable.
+/// If you want to implement range checking in output, add a return value
+/// in output(): false=ok, true=abort; and a return value in outputcopy():
+/// 0=ok, nonzero=one or more bytes were not writable.
 //
-// Results:
-//       0 = decompression complete
-//      -1 = data error
-//      -2 = input functor returned a value outside 0x00..0xFF range
-//      -3 = output functor returned nonzero / bool true value
-//      -4 = outputcopy functor returned nonzero remaining length value
+/// @returns:
+///       0 = decompression complete
+///      -1 = data error
+///      -2 = input functor returned a value outside 0x00..0xFF range
+///      -3 = output functor returned nonzero / bool true value
+///      -4 = outputcopy functor returned nonzero remaining length value
 //
 template<typename InputFunctor, typename OutputFunctor, typename WindowFunctor>
 int Deflate(InputFunctor&& input, OutputFunctor&& output, WindowFunctor&& outputcopy);
 
-// Check README.md for the full list of versions of Deflate() available.
+/// Check README.md for the full list of versions of Deflate() available.
 
 #endif
 
@@ -72,7 +73,8 @@ struct DeflateTrackOutSize: public DeflateTrackTagBase{};
 struct DeflateTrackBothSize: public DeflateTrackTagBase{};
 
 
-// The rest of the file is just for the curious about implementation.
+/// The rest of the file is just for the curious about implementation.
+#ifndef DOXYGEN_SHOULD_SKIP_THIS
 namespace gunzip_ns
 {
     //#define DO_DEFDB_DUMPING
@@ -212,25 +214,25 @@ namespace gunzip_ns
 {
     struct dummy{};
 
-    // Utility: ceil(log2(n))
+    /// Utility: ceil(log2(n))
     template<unsigned long N> struct CeilLog2_s{ static constexpr unsigned result = 1+CeilLog2_s<(N+1)/2>::result; };
     template<> struct CeilLog2_s<0> { static constexpr unsigned result = 0; };
     template<> struct CeilLog2_s<1> { static constexpr unsigned result = 0; };
     template<unsigned long N> static constexpr unsigned CeilLog2 = CeilLog2_s<N>::result;
 
-    // Utility: floor(log2(n))
+    /// Utility: floor(log2(n))
     template<unsigned long N> struct FloorLog2_s{ static constexpr unsigned result = 1+FloorLog2_s<N/2>::result; };
     template<> struct FloorLog2_s<0> { static constexpr unsigned result = 0; };
     template<> struct FloorLog2_s<1> { static constexpr unsigned result = 0; };
     template<unsigned long N> static constexpr unsigned FloorLog2 = FloorLog2_s<N>::result;
 
-    // Utility: smallest unsigned integer type that can store n-bit value
+    /// Utility: smallest unsigned integer type that can store n-bit value
     template<unsigned bits>
     using SmallestType = std::conditional_t< (bits<=16),
                          std::conditional_t< (bits<= 8), std::uint_least8_t,  std::uint_least16_t>,
                          std::conditional_t< (bits<=32), std::uint_least32_t, std::uint_least64_t>>;
 
-    // testcases
+    /// testcases
     static_assert(FloorLog2<1> == 0, "FloorLog2 fail"); static_assert(CeilLog2<1> == 0, "CeilLog2 fail");
     static_assert(FloorLog2<2> == 1, "FloorLog2 fail"); static_assert(CeilLog2<2> == 1, "CeilLog2 fail");
     static_assert(FloorLog2<3> == 1, "FloorLog2 fail"); static_assert(CeilLog2<3> == 2, "CeilLog2 fail");
@@ -1424,3 +1426,5 @@ auto Deflate(T&&... args)
 {
     return gunzip_ns::DeflateInputDispatch<0>(gunzip_ns::dummy{}, std::forward<T>(args)...);
 }
+
+#endif /* #ifndef DOXYGEN_SHOULD_SKIP_THIS */
